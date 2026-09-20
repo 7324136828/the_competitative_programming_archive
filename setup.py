@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Set up the Python backend, React frontend, and dependencies."""
+"""Set up CodeJudge and its separate Python 3.12 Kokoro speech service."""
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import subprocess
@@ -10,7 +11,14 @@ import sys
 import venv
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+from launcher_config import (
+    KOKORO_DIR,
+    KOKORO_PYTHON,
+    ROOT,
+    kokoro_device,
+    load_env_file,
+)
+
 BACKEND_REQUIREMENTS = ROOT / "backend" / "requirements.txt"
 FRONTEND = ROOT / "frontend"
 E2E = ROOT / "e2e"
@@ -35,7 +43,10 @@ def in_active_environment() -> bool:
 def run(command: list[str | Path], *, cwd: Path = ROOT) -> None:
     rendered = [str(part) for part in command]
     print(f"[setup] $ {' '.join(rendered)}", flush=True)
-    completed = subprocess.run(rendered, cwd=cwd, check=False)
+    try:
+        completed = subprocess.run(rendered, cwd=cwd, check=False)
+    except OSError as error:
+        raise SetupError(f"Could not start {rendered[0]}: {error}") from error
     if completed.returncode:
         raise SetupError(
             f"Command failed with exit code {completed.returncode}: "
@@ -66,9 +77,102 @@ def seed_environment_file() -> None:
         print("[setup] Created .env from .env.example")
 
 
-def main() -> int:
-    if sys.version_info < (3, 10):
-        raise SetupError("Python 3.10 or newer is required")
+def is_python312(command: list[str | Path]) -> bool:
+    """Probe the interpreter itself, regardless of the currently active venv."""
+    try:
+        completed = subprocess.run(
+            [str(part) for part in command]
+            + ["-c", "import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else 1)"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return False
+    return completed.returncode == 0
+
+
+def find_python312() -> list[str]:
+    candidates: list[list[str]] = []
+    if os.name == "nt":
+        launcher = shutil.which("py")
+        if launcher:
+            candidates.append([launcher, "-3.12"])
+    python312 = shutil.which("python3.12")
+    if python312:
+        candidates.append([python312])
+    if sys.version_info[:2] == (3, 12):
+        candidates.append([sys.executable])
+    for candidate in candidates:
+        if is_python312(candidate):
+            return candidate
+    raise SetupError(
+        "Kokoro requires standalone Python 3.12. Install Python 3.12 "
+        "(with the py launcher on Windows, or python3.12 on PATH), then retry. "
+        "Use --skip-kokoro to set up only the application."
+    )
+
+
+def setup_kokoro(device: str, *, reuse_system_packages: bool = False) -> None:
+    if device not in {"cuda", "cpu"}:
+        raise SetupError("Kokoro setup device must be cuda or cpu")
+    requirements = KOKORO_DIR / "requirements.txt"
+    cuda_requirements = KOKORO_DIR / "requirements-cuda.txt"
+    for required in [requirements] + ([cuda_requirements] if device == "cuda" else []):
+        if not required.is_file():
+            raise SetupError(f"Kokoro requirements file not found: {required}")
+
+    if not KOKORO_PYTHON.is_file():
+        base_python = find_python312()
+        environment = KOKORO_DIR / ".venv"
+        command = [*base_python, "-m", "venv"]
+        if reuse_system_packages:
+            command.append("--system-site-packages")
+        command.append(str(environment))
+        print(f"[setup] Creating separate Python 3.12 environment at {environment}")
+        run(command)
+    else:
+        print(f"[setup] Reusing Kokoro environment at {KOKORO_DIR / '.venv'}")
+    if not KOKORO_PYTHON.is_file() or not is_python312([KOKORO_PYTHON]):
+        raise SetupError(
+            f"Kokoro's interpreter must be Python 3.12: {KOKORO_PYTHON}. "
+            "Move the existing python-kokoro/.venv aside and retry setup "
+            "with Python 3.12 installed."
+        )
+
+    print(f"[setup] Installing Kokoro dependencies for {device} with {KOKORO_PYTHON}")
+    if device == "cuda":
+        run([KOKORO_PYTHON, "-m", "pip", "install", "--upgrade", "-r", cuda_requirements])
+    else:
+        run([
+            KOKORO_PYTHON, "-m", "pip", "install", "torch==2.11.0",
+            "--index-url", "https://download.pytorch.org/whl/cpu",
+        ])
+    run([KOKORO_PYTHON, "-m", "pip", "install", "-r", requirements])
+    run([
+        KOKORO_PYTHON, "-c",
+        "import sys, kokoro, torch; print('Kokoro Python:', sys.executable); "
+        "print('Python:', sys.version.split()[0]); print('PyTorch:', torch.__version__)",
+    ])
+    if device == "cuda":
+        try:
+            run([
+                KOKORO_PYTHON, "-c",
+                "import torch; "
+                "assert torch.version.cuda, 'Install a CUDA-enabled PyTorch build'; "
+                "assert torch.cuda.is_available(), 'CUDA is unavailable; check the NVIDIA driver'; "
+                "torch.ones(1, device='cuda').add_(1).item(); "
+                "print('CUDA:', torch.version.cuda); print('GPU:', torch.cuda.get_device_name(0))",
+            ])
+        except SetupError as error:
+            raise SetupError(
+                "Kokoro CUDA verification failed. Check the NVIDIA driver, or explicitly "
+                "use --kokoro-device cpu for setup and run. CUDA will not silently fall back to CPU."
+            ) from error
+    print("[setup] Kokoro model and language data are downloaded on the first speech request.")
+
+
+def setup_application() -> None:
     npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
     if npm is None:
         raise SetupError("Node.js and npm were not found on PATH")
@@ -87,16 +191,40 @@ def main() -> int:
     print("[setup] Installing end-to-end test dependencies")
     run([npm, "install"], cwd=E2E)
 
-    if (E2E / "package.json").is_file():
-        print("[setup] Installing end-to-end test dependencies")
+
+def main(argv: list[str] | None = None) -> int:
+    if sys.version_info < (3, 10):
+        raise SetupError("Python 3.10 or newer is required")
+    load_env_file()
+    parser = argparse.ArgumentParser(description=__doc__)
+    scope = parser.add_mutually_exclusive_group()
+    scope.add_argument("--skip-kokoro", action="store_true", help="Set up only the application")
+    scope.add_argument("--kokoro-only", action="store_true", help="Set up only the speech service")
+    parser.add_argument(
+        "--kokoro-device", choices=("cuda", "cpu"),
+        help="Kokoro PyTorch build (default: KOKORO_DEVICE, otherwise cuda)",
+    )
+    parser.add_argument(
+        "--reuse-kokoro-system-packages", action="store_true",
+        help="Allow a new Kokoro venv to use packages from the standalone Python 3.12 installation",
+    )
+    options = parser.parse_args(argv)
+    device = None
+    if not options.skip_kokoro:
         try:
-            run([npm, "install"], cwd=E2E)
-        except Exception as e:
-            print(f"[setup] Warning: E2E dependency install skipped: {e}")
-
+            device = kokoro_device(options.kokoro_device)
+        except ValueError as error:
+            raise SetupError(str(error)) from error
+        # An automatic runtime still needs a CUDA-capable installation to use the GPU.
+        if device == "auto":
+            device = "cuda"
     seed_environment_file()
+    if not options.kokoro_only:
+        setup_application()
+    if device:
+        setup_kokoro(device, reuse_system_packages=options.reuse_kokoro_system_packages)
 
-    print("\n[setup] Ready. Start the application with run.bat or ./run.sh")
+    print("\n[setup] Ready. Start CodeJudge and Kokoro with run.bat or ./run.sh")
     return 0
 
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Code2, ListFilter, Upload, Shuffle, Terminal, Trash2, MessageSquare, Sparkles } from 'lucide-react';
+import { Code2, ListFilter, Upload, Shuffle, History, Trash2, MessageSquare, Sparkles, Settings } from 'lucide-react';
 
 export default function Navbar({
   currentView,
@@ -28,7 +28,7 @@ export default function Navbar({
       top: 0,
       zIndex: 40
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', flexWrap: 'wrap' }}>
         {/* Brand */}
         <div 
           onClick={() => onViewChange('list')}
@@ -82,6 +82,14 @@ export default function Navbar({
         >
           <ListFilter size={16} />
           Problem Set
+        </button>
+
+        <button onClick={() => onViewChange('submissions')} className="btn btn-ghost" aria-current={currentView === 'submissions' ? 'page' : undefined} style={{ fontSize: '0.85rem', color: currentView === 'submissions' ? '#ffa116' : '#9ea3ab', backgroundColor: currentView === 'submissions' ? '#333' : 'transparent' }}>
+          <History size={16} /> Submissions
+        </button>
+
+        <button onClick={() => onViewChange('settings')} className="btn btn-ghost" aria-current={currentView === 'settings' ? 'page' : undefined} style={{ fontSize: '0.85rem', color: currentView === 'settings' ? '#ffa116' : '#9ea3ab', backgroundColor: currentView === 'settings' ? '#333' : 'transparent' }}>
+          <Settings size={16} /> Settings
         </button>
 
         {/* Active problem breadcrumb */}
@@ -179,4 +187,3 @@ export default function Navbar({
     </header>
   );
 }
-

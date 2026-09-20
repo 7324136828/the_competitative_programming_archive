@@ -1,7 +1,9 @@
 import React from 'react';
+import RichContent from './RichContent';
 import { Languages, Sparkles, RotateCcw } from 'lucide-react';
 import HintPanel from './HintPanel';
 import RecommendationList from './RecommendationList';
+import ProblemAudio from './ProblemAudio';
 
 export default function ProblemDetail({
   problem,
@@ -48,8 +50,8 @@ export default function ProblemDetail({
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.4rem', flexWrap: 'wrap' }}>
-              <span style={{ fontSize: '0.8rem', color: '#888', fontWeight: 600 }}>
-                #{problem.id}
+              <span style={{ fontSize: '0.8rem', color: problem.is_solved ? '#2cbb5d' : '#888', fontWeight: 600 }}>
+                #{problem.id}{problem.is_solved ? ' · Solved' : ''}
               </span>
               <span className={`badge badge-${problem.difficulty ? problem.difficulty.toLowerCase() : 'medium'}`}>
                 {problem.difficulty || 'Medium'}
@@ -140,17 +142,15 @@ export default function ProblemDetail({
 
       {/* Main Body */}
       <div style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <ProblemAudio key={problem.id} problem={problem} />
         {/* Problem Statement */}
         <section>
-          <div style={{
+          <RichContent content={displayStatements} style={{
             color: '#d1d5db',
             fontSize: '0.9rem',
             lineHeight: 1.65,
-            whiteSpace: 'pre-wrap',
             fontFamily: 'Inter, system-ui, sans-serif'
-          }}>
-            {displayStatements}
-          </div>
+          }} />
         </section>
 
         {/* Sample Inputs and Outputs */}
@@ -213,7 +213,7 @@ export default function ProblemDetail({
         )}
 
         {/* AI Progressive Thinking Hints */}
-        <HintPanel problemId={problem.id} />
+        <HintPanel key={problem.id} problemId={problem.id} />
 
         {/* AI Recommended Problems */}
         <RecommendationList problemId={problem.id} onSelectProblem={onSelectProblem} />
@@ -221,4 +221,3 @@ export default function ProblemDetail({
     </div>
   );
 }
-

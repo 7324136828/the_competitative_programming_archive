@@ -193,8 +193,14 @@ export default function ProblemList({ onSelectProblem }) {
                     onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#292929'}
                     onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                   >
-                    <td style={{ padding: '0.85rem 1rem', fontSize: '0.85rem', color: '#777', fontWeight: 600 }}>
-                      {p.id}
+                    <td style={{ padding: '0.85rem 1rem', fontSize: '0.85rem', color: p.is_solved ? '#2cbb5d' : '#777', fontWeight: 600 }}>
+                      <button
+                        onClick={(event) => { event.stopPropagation(); onSelectProblem(p.id); }}
+                        aria-label={`${p.is_solved ? 'Revisit solved problem' : 'Solve problem'} ${p.id}`}
+                        style={{ color: 'inherit', font: 'inherit', padding: 0, border: 0, background: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '0.3rem' }}
+                      >
+                        {p.is_solved && <CheckCircle2 size={14} />}{p.id}
+                      </button>
                     </td>
 
                     <td style={{ padding: '0.85rem 1rem' }}>
@@ -240,7 +246,7 @@ export default function ProblemList({ onSelectProblem }) {
 
                     <td style={{ padding: '0.85rem 1rem', textAlign: 'right' }}>
                       <button className="btn btn-secondary" style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}>
-                        Solve
+                        {p.is_solved ? 'Solve Again' : 'Solve'}
                       </button>
                     </td>
                   </tr>
@@ -291,4 +297,3 @@ export default function ProblemList({ onSelectProblem }) {
     </div>
   );
 }
-

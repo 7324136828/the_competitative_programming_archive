@@ -1,6 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, X, Send, Bot, User, Sparkles, Loader2, Code2, Lightbulb, Bug, Check, Copy } from 'lucide-react';
 import { chatWithAI, fetchChatHistory } from '../services/api';
+import LLMModel, { useLLMModel } from './LLMModel';
+import RichContent from './RichContent';
+import ResponseAudio from './ResponseAudio';
+import { contentText } from '../utils/richContent';
 
 export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCode, currentLanguage, onApplyTestCases, onApplyThinkingSteps }) {
   const [messages, setMessages] = useState([
@@ -14,6 +18,8 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
   const [includeContext, setIncludeContext] = useState(true);
   const [copiedIndex, setCopiedIndex] = useState(null);
   const messagesEndRef = useRef(null);
+  const { model, ready } = useLLMModel();
+  const [usedModel, setUsedModel] = useState(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -23,7 +29,7 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
 
   const handleSend = async (customMessage) => {
     const textToSend = customMessage || input;
-    if (!textToSend.trim() || loading) return;
+    if (!textToSend.trim() || loading || !ready) return;
 
     const userMessage = { role: 'user', content: textToSend };
     const updatedMessages = [...messages, userMessage];
@@ -37,11 +43,13 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
         problemId: includeContext && currentProblem ? currentProblem.id : null,
         code: includeContext && currentCode ? currentCode : null,
         language: includeContext ? currentLanguage : null,
-        sessionId: 'user-chat-session'
+        sessionId: 'user-chat-session',
+        model
       });
 
       if (res.success && res.reply) {
-        setMessages(prev => [...prev, { role: 'assistant', content: res.reply }]);
+        setUsedModel(res.model || model);
+        setMessages(prev => [...prev, { role: 'assistant', content: contentText(res.reply) }]);
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: 'I encountered an error generating a response. Please try again.' }]);
       }
@@ -81,7 +89,7 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
       display: 'flex',
       flexDirection: 'column',
       boxShadow: '-8px 0 24px rgba(0, 0, 0, 0.45)'
-    }}>
+    }} role="dialog" aria-label="AI Assistant">
       {/* Header */}
       <div style={{
         padding: '0.85rem 1rem',
@@ -117,6 +125,7 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
         </button>
       </div>
 
+      <div style={{ padding: '0.4rem 1rem' }}><LLMModel usedModel={usedModel} /></div>
       {/* Context Toggle */}
       {currentProblem && (
         <div style={{
@@ -155,7 +164,8 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
               display: 'flex',
               flexDirection: 'column',
               alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-              maxWidth: '92%'
+              maxWidth: '92%',
+              minWidth: 0
             }}
           >
             <div style={{
@@ -177,23 +187,28 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
               padding: '0.65rem 0.85rem',
               fontSize: '0.825rem',
               lineHeight: 1.45,
-              whiteSpace: 'pre-wrap',
+              whiteSpace: m.role === 'user' ? 'pre-wrap' : 'normal',
+              overflowWrap: 'anywhere',
+              minWidth: 0,
               border: m.role === 'user' ? 'none' : '1px solid #383838',
               boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
             }}>
-              {m.content}
+              {m.role === 'assistant' ? <RichContent content={m.content} /> : m.content}
             </div>
             {m.role === 'assistant' && (
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
-                <button
-                  onClick={() => copyToClipboard(m.content, idx)}
-                  className="btn btn-ghost"
-                  style={{ padding: '0.1rem 0.3rem', fontSize: '0.68rem', color: '#888', gap: '0.2rem' }}
-                >
-                  {copiedIndex === idx ? <Check size={11} color="#2cbb5d" /> : <Copy size={11} />}
-                  {copiedIndex === idx ? 'Copied' : 'Copy'}
-                </button>
-              </div>
+              <>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
+                  <button
+                    onClick={() => copyToClipboard(m.content, idx)}
+                    className="btn btn-ghost"
+                    style={{ padding: '0.1rem 0.3rem', fontSize: '0.68rem', color: '#888', gap: '0.2rem' }}
+                  >
+                    {copiedIndex === idx ? <Check size={11} color="#2cbb5d" /> : <Copy size={11} />}
+                    {copiedIndex === idx ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <ResponseAudio text={m.content} label="Read response aloud" />
+              </>
             )}
           </div>
         ))}
@@ -217,6 +232,7 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
       }}>
         <button
           onClick={() => handleSend('Can you explain the problem constraints and outline 5 to 10 thinking steps?')}
+          disabled={loading || !ready}
           className="btn btn-secondary"
           style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem', whiteSpace: 'nowrap', gap: '0.25rem' }}
         >
@@ -225,6 +241,7 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
         </button>
         <button
           onClick={() => handleSend('Can you generate boundary and edge test cases based on the limitations of this problem?')}
+          disabled={loading || !ready}
           className="btn btn-secondary"
           style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem', whiteSpace: 'nowrap', gap: '0.25rem' }}
         >
@@ -233,6 +250,7 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
         </button>
         <button
           onClick={() => handleSend('Can you review and debug my current code for potential edge-case failures or time limits?')}
+          disabled={loading || !ready}
           className="btn btn-secondary"
           style={{ fontSize: '0.72rem', padding: '0.25rem 0.5rem', whiteSpace: 'nowrap', gap: '0.25rem' }}
         >
@@ -270,7 +288,8 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
         />
         <button
           onClick={() => handleSend()}
-          disabled={!input.trim() || loading}
+          aria-label="Send message"
+          disabled={!input.trim() || loading || !ready}
           className="btn btn-primary"
           style={{ padding: '0.5rem 0.75rem', alignSelf: 'flex-end' }}
         >
@@ -280,4 +299,3 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
     </div>
   );
 }
-

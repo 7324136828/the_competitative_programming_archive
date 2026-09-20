@@ -58,11 +58,33 @@ class ExecutorTests(unittest.TestCase):
         self.assertFalse(result["passed"])
         self.assertLess(result["runtimeMs"], 10000)
 
-    def test_empty_submission_runs_once(self):
-        result = executor.submit_code("python", "print('ok')")
+    def test_empty_submission_is_not_judged_or_executed(self):
+        with patch.object(executor, "_prepare_code") as prepare:
+            result = executor.submit_code("python", "print('ok')")
+        self.assertEqual(result["status"], "Not Judged")
+        self.assertEqual(result["passedTests"], 0)
+        self.assertEqual(result["totalTests"], 0)
+        self.assertEqual(result["results"], [])
+        prepare.assert_not_called()
+
+    def test_missing_expected_outputs_are_invalid(self):
+        for case in ({"input": ""}, {"input": "", "output": None}):
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                executor.submit_code("python", "pass", [case])
+
+    def test_empty_expected_output_is_compared(self):
+        result = executor.run_code("python", "print('unexpected')", expected_output="")
+        self.assertEqual(result["status"], "Wrong Answer")
+        self.assertFalse(result["passed"])
+        result = executor.submit_code("python", "pass", [{"input": "", "output": ""}])
         self.assertEqual(result["status"], "Accepted")
         self.assertEqual(result["passedTests"], 1)
-        self.assertEqual(result["totalTests"], 1)
+
+    def test_progress_follows_compilation_then_test_execution(self):
+        phases = []
+        result = executor.submit_code("python", "print(input())", [{"input": "1", "output": "1"}], progress=phases.append)
+        self.assertEqual(result["status"], "Accepted")
+        self.assertEqual(phases, ["compiling", "running"])
 
     def test_unsupported_language_is_a_compile_error(self):
         result = executor.submit_code("ruby", "puts 'hello'", [{"input": "", "output": "hello"}])
@@ -140,4 +162,3 @@ class ExecutorTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

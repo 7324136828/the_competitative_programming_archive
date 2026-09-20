@@ -1,36 +1,69 @@
 import React, { useState } from 'react';
 import { Sparkles, X, PlusCircle, Check, Loader2, BookOpen, Database } from 'lucide-react';
 import { generateSimilarProblem, saveProblem } from '../services/api';
+import LLMModel, { useLLMModel } from './LLMModel';
+import RichContent from './RichContent';
 
 export default function GenerateProblemModal({ problem, isOpen, onClose, onProblemCreated }) {
   const [loading, setLoading] = useState(false);
   const [generated, setGenerated] = useState(null);
   const [savedProblem, setSavedProblem] = useState(null);
   const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [usedModel, setUsedModel] = useState(null);
+  const { model, ready } = useLLMModel();
 
   if (!isOpen) return null;
 
   const handleClose = () => {
+    if (loading || saving) return;
     onClose();
   };
 
   const handleGenerate = async () => {
+    if (!ready || loading || saving) return;
     setLoading(true);
     setError(null);
+    setGenerated(null);
+    setSavedProblem(null);
+    setUsedModel(null);
     try {
       const res = await generateSimilarProblem({
         problemId: problem ? problem.id : null,
         difficulty: problem ? problem.difficulty : 'Medium',
-        autoSave: true
+        autoSave: true,
+        model
       });
       if (res.success) {
         setGenerated(res.generatedProblem);
         setSavedProblem(res.savedProblem);
+        setUsedModel(res.model || model);
       }
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSolve = async () => {
+    if (!generated || loading || saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      let persisted = savedProblem;
+      if (!persisted?.id) {
+        const response = await saveProblem(generated);
+        persisted = response.problem;
+        if (!persisted?.id) throw new Error('The problem could not be saved. Please try again.');
+        setSavedProblem(persisted);
+      }
+      onProblemCreated?.(persisted);
+      onClose();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -69,6 +102,7 @@ export default function GenerateProblemModal({ problem, isOpen, onClose, onProbl
 
         {/* Content */}
         <div style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <LLMModel usedModel={usedModel} />
           {!generated ? (
             <div style={{ textAlign: 'center', padding: '1.5rem 1rem' }}>
               <p style={{ color: '#aaa', fontSize: '0.875rem', marginBottom: '1.25rem', maxWidth: '480px', margin: '0 auto 1.25rem' }}>
@@ -76,7 +110,7 @@ export default function GenerateProblemModal({ problem, isOpen, onClose, onProbl
               </p>
               <button
                 onClick={handleGenerate}
-                disabled={loading}
+                disabled={loading || !ready}
                 className="btn btn-primary"
                 style={{ padding: '0.6rem 1.5rem', fontSize: '0.9rem' }}
               >
@@ -126,9 +160,8 @@ export default function GenerateProblemModal({ problem, isOpen, onClose, onProbl
                   padding: '0.75rem',
                   borderRadius: '0.375rem',
                   border: '1px solid #282828',
-                  whiteSpace: 'pre-wrap'
                 }}>
-                  {generated.problem_statements}
+                  <RichContent content={generated.problem_statements} />
                 </div>
 
                 {generated.sample_input_output?.length > 0 && (
@@ -155,29 +188,25 @@ export default function GenerateProblemModal({ problem, isOpen, onClose, onProbl
               }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#2cbb5d', fontSize: '0.825rem' }}>
                   <Database size={15} />
-                  <span>Problem successfully saved to database! (ID: {savedProblem?.id})</span>
+                  <span>{savedProblem?.id ? `Saved to database (ID: ${savedProblem.id})` : 'This preview will be saved when you select Solve This Problem.'}</span>
                 </div>
 
                 <div style={{ display: 'flex', gap: '0.5rem' }}>
                   <button
                     onClick={handleGenerate}
-                    disabled={loading}
+                    disabled={loading || saving || !ready}
                     className="btn btn-secondary"
                     style={{ fontSize: '0.825rem' }}
                   >
                     {loading ? <Loader2 size={14} className="animate-spin" /> : 'Generate Another'}
                   </button>
                   <button
-                    onClick={() => {
-                      if (onProblemCreated && savedProblem) {
-                        onProblemCreated(savedProblem);
-                      }
-                      onClose();
-                    }}
+                    onClick={handleSolve}
+                    disabled={loading || saving}
                     className="btn btn-primary"
                     style={{ fontSize: '0.825rem' }}
                   >
-                    Solve This Problem
+                    {saving ? 'Saving...' : 'Solve This Problem'}
                   </button>
                 </div>
               </div>
@@ -194,4 +223,3 @@ export default function GenerateProblemModal({ problem, isOpen, onClose, onProbl
     </div>
   );
 }
-

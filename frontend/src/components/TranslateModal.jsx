@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Languages, X, Check, Loader2, Globe } from 'lucide-react';
 import { translateProblem } from '../services/api';
+import LLMModel, { useLLMModel } from './LLMModel';
+import RichContent from './RichContent';
 
 const SUPPORTED_LANGUAGES = [
   { code: 'en', name: 'English 🇺🇸' },
@@ -17,10 +19,12 @@ export default function TranslateModal({ problem, isOpen, onClose, onApplyTransl
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
+  const { model, ready } = useLLMModel();
 
   if (!isOpen || !problem) return null;
 
   const handleTranslate = async () => {
+    if (!ready || loading) return;
     setLoading(true);
     setError(null);
     try {
@@ -28,7 +32,8 @@ export default function TranslateModal({ problem, isOpen, onClose, onApplyTransl
         problemId: problem.id,
         targetLanguage: targetLang,
         title: problem.title,
-        problem_statements: problem.problem_statements
+        problem_statements: problem.problem_statements,
+        model
       });
 
       if (res.success) {
@@ -88,6 +93,7 @@ export default function TranslateModal({ problem, isOpen, onClose, onApplyTransl
 
         {/* Body */}
         <div style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          <LLMModel usedModel={result?.model} />
           <div>
             <label style={{ display: 'block', fontSize: '0.8rem', color: '#aaa', marginBottom: '0.4rem' }}>
               Select Target Language:
@@ -117,7 +123,7 @@ export default function TranslateModal({ problem, isOpen, onClose, onApplyTransl
 
           <button
             onClick={handleTranslate}
-            disabled={loading}
+            disabled={loading || !ready}
             className="btn btn-primary"
             style={{ width: '100%', padding: '0.6rem', fontSize: '0.875rem' }}
           >
@@ -162,16 +168,13 @@ export default function TranslateModal({ problem, isOpen, onClose, onApplyTransl
 
               <div>
                 <span style={{ fontSize: '0.75rem', color: '#ffa116', fontWeight: 600 }}>TRANSLATED STATEMENT</span>
-                <pre style={{
+                <RichContent content={result.translatedStatements} style={{
                   fontSize: '0.8rem',
                   color: '#ccc',
                   fontFamily: 'inherit',
-                  whiteSpace: 'pre-wrap',
                   marginTop: '0.3rem',
                   lineHeight: 1.5
-                }}>
-                  {result.translatedStatements}
-                </pre>
+                }} />
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: '0.5rem', borderTop: '1px solid #2e2e2e' }}>
@@ -186,4 +189,3 @@ export default function TranslateModal({ problem, isOpen, onClose, onApplyTransl
     </div>
   );
 }
-

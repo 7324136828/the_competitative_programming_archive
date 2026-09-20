@@ -16,3 +16,9 @@ def default_database_path() -> Path:
     project_id = hashlib.sha256(project.encode("utf-8")).hexdigest()[:12]
     return Path(tempfile.gettempdir()) / "codejudge" / project_id / "leetcode.db"
 
+
+def default_storage_path(database_path: str | Path) -> Path:
+    """Keep file references separate for each database, in durable workspace storage."""
+    database = os.path.normcase(str(Path(database_path).resolve()))
+    database_id = hashlib.sha256(database.encode("utf-8")).hexdigest()[:12]
+    return ROOT / "data" / "workspace" / database_id

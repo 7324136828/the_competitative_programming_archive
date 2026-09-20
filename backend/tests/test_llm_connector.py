@@ -6,8 +6,13 @@
 """
 
 from pathlib import Path
+import json
+import os
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import httpx
 
 from backend.app import create_app
 from backend.llm import (
@@ -15,11 +20,16 @@ from backend.llm import (
     generate_ai_problem,
     generate_test_cases_by_limitations,
     get_thinking_hints,
+    get_model_info,
+    LLMError,
 )
 
 
 class LLMConnectorTests(unittest.TestCase):
     def setUp(self):
+        offline = patch.dict(os.environ, {"LLM_PROVIDER": "mock", "LLM_MODEL": ""})
+        offline.start()
+        self.addCleanup(offline.stop)
         self.temporary = tempfile.TemporaryDirectory(prefix="judge_llm_test_")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -151,6 +161,161 @@ class LLMConnectorTests(unittest.TestCase):
         self.assertEqual(messages[1]["role"], "assistant")
 
 
+class GatewayConnectorTests(unittest.TestCase):
+    """Exercise real request/response parsing without reaching an upstream provider."""
+
+    def setUp(self):
+        environment = patch.dict(os.environ, {
+            "LLM_PROVIDER": "the_connector", "LLM_MODEL": "",
+            "CONNECTOR_BASE_URL": "http://connector.test/v1", "LLM_TIMEOUT_SECONDS": "120",
+        })
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.problem = {
+            "title": "A + B", "problem_statements": "Read two integers and print their sum.",
+            "sample_input_output": [{"input": "1 2\n", "output": "3\n"}],
+        }
+        self.calls = []
+        self.models = [{"id": "z-assistant"}, {"id": "a-assistant", "owned_by": "the_connector"}]
+        self.reply = "A response from the selected model."
+        self.replies = []
+        self.discovery_status = 200
+        self.completion_status = 200
+        self.failure = None
+        original_client = httpx.Client
+        transport = httpx.MockTransport(self.handle_request)
+        client_patch = patch("backend.llm.httpx.Client", side_effect=lambda **kwargs: original_client(transport=transport, **kwargs))
+        client_patch.start()
+        self.addCleanup(client_patch.stop)
+
+    def handle_request(self, request):
+        self.calls.append((request.method, request.url.path, json.loads(request.content) if request.content else None))
+        if self.failure:
+            raise self.failure
+        if request.url.path == "/v1/models":
+            return httpx.Response(self.discovery_status, json={"object": "list", "data": self.models})
+        self.assertEqual(request.url.path, "/v1/chat/completions")
+        reply = self.replies.pop(0) if self.replies else self.reply
+        return httpx.Response(self.completion_status, json={
+            "choices": [{"message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}],
+            "error": {"message": "upstream-token-should-never-be-exposed"},
+        })
+
+    def test_discovery_precedes_completion_and_selected_alias_is_sent(self):
+        result = chat_response([{"role": "user", "content": "Explain addition."}])
+        self.assertEqual(result["model"], "a-assistant")
+        self.assertEqual(result["provider"], "the_connector")
+        self.assertEqual([call[:2] for call in self.calls], [("GET", "/v1/models"), ("POST", "/v1/chat/completions")])
+        self.assertEqual(self.calls[1][2]["model"], "a-assistant")
+        self.assertFalse(self.calls[1][2]["stream"])
+        # Leave provider-dependent temperature and response_format to gateway routes.
+        self.assertNotIn("temperature", self.calls[1][2])
+        self.assertNotIn("response_format", self.calls[1][2])
+
+    def test_environment_and_request_models_are_validated(self):
+        with patch.dict(os.environ, {"LLM_MODEL": "z-assistant"}):
+            self.assertEqual(get_model_info()["model"], "z-assistant")
+            self.assertEqual(get_model_info("a-assistant")["model"], "a-assistant")
+        with self.assertRaises(LLMError) as caught:
+            get_model_info("missing-model")
+        self.assertEqual(caught.exception.status_code, 400)
+        self.assertTrue(all(call[0] == "GET" for call in self.calls))
+        with self.assertRaises(LLMError) as caught:
+            get_model_info({"id": "a-assistant"})
+        self.assertEqual(caught.exception.status_code, 400)
+
+    def test_no_active_models_has_actionable_error(self):
+        self.models = []
+        with self.assertRaisesRegex(LLMError, "Save and activate") as caught:
+            generate_ai_problem()
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_network_failure_never_falls_back_to_mock(self):
+        self.failure = httpx.ConnectError("sensitive upstream details")
+        with self.assertRaisesRegex(LLMError, "Cannot reach The Connector") as caught:
+            generate_test_cases_by_limitations(self.problem)
+        self.assertEqual(caught.exception.status_code, 503)
+        self.assertNotIn("sensitive", str(caught.exception))
+
+    def test_http_failure_does_not_leak_gateway_error_body(self):
+        self.completion_status = 502
+        with self.assertRaisesRegex(LLMError, "HTTP 502") as caught:
+            generate_ai_problem()
+        self.assertNotIn("upstream-token", str(caught.exception))
+
+    def test_empty_completion_and_invalid_json_are_errors(self):
+        for response in ("", "Here is an invalid partial response: {", "{\"title\": \"Only a title\"}"):
+            with self.subTest(response=response):
+                self.reply = response
+                with self.assertRaises(LLMError):
+                    generate_ai_problem()
+
+    def test_generated_problem_schema_and_provenance(self):
+        self.reply = json.dumps({
+            "title": "Add three integers", "problem_statements": "Read a, b, c and print a+b+c.",
+            "sample_input_output": [{"input": "1 2 3\n", "output": "6\n"}],
+            "hints": ["Add the numbers."], "tags": ["Math"], "difficulty": "Easy",
+            "source": "untrusted", "language": "en",
+        })
+        generated = generate_ai_problem(self.problem, difficulty="Easy", model="z-assistant")
+        self.assertEqual(generated["language"], "ai")
+        self.assertEqual(generated["source"], "unknown")
+        self.assertEqual(generated["model"], "z-assistant")
+        self.assertEqual(generated["sample_input_output"][0]["output"], "6\n")
+        data = json.loads(self.reply)
+        data["sample_input_output"] = [{"input": "1 2 3"}]
+        self.reply = json.dumps(data)
+        with self.assertRaises(LLMError):
+            generate_ai_problem(self.problem)
+
+    def test_invalid_json_gets_one_portable_repair_request(self):
+        cases = [{"input": "1 2\n", "output": "3\n", "explanation": "Small inputs"}] * 3
+        self.replies = ['[{"input":"1 2", "output": "3",}]', json.dumps(cases)]
+        self.assertEqual(generate_test_cases_by_limitations(self.problem), cases)
+        completions = [call[2] for call in self.calls if call[0] == "POST"]
+        self.assertEqual(len(completions), 2)
+        self.assertEqual(completions[1]["messages"][-2]["role"], "assistant")
+        self.assertIn("not valid JSON", completions[1]["messages"][-1]["content"])
+        self.assertNotIn("response_format", completions[1])
+        self.assertEqual(completions[1]["model"], "a-assistant")
+
+    def test_invalid_json_repair_is_bounded_and_never_returns_mock_data(self):
+        self.reply = 'Invalid JSON with unescaped \\sum'
+        with self.assertRaisesRegex(LLMError, "invalid JSON"):
+            generate_ai_problem(self.problem)
+        self.assertEqual(sum(call[0] == "POST" for call in self.calls), 2)
+
+    def test_hints_use_real_completion_and_enforce_step_bounds(self):
+        steps = [{"title": f"Reason {index}", "category": "Thinking", "description": f"Description {index}"} for index in range(6)]
+        self.reply = "```json\n" + json.dumps(steps) + "\n```"
+        hints = get_thinking_hints(self.problem, hint_level=2)
+        self.assertEqual(hints["model"], "a-assistant")
+        self.assertEqual(hints["totalSteps"], 6)
+        self.assertEqual(len(hints["allSteps"]), 2)
+        self.assertEqual(hints["stepTitle"], "Step 2: Reason 1")
+        self.assertEqual(hints["hintText"], "Description 1")
+        for count in (4, 11):
+            self.reply = json.dumps([steps[0]] * count)
+            with self.assertRaisesRegex(LLMError, "between 5 and 10"):
+                get_thinking_hints(self.problem)
+
+    def test_generated_test_cases_preserve_whitespace_and_reject_null_outputs(self):
+        cases = [{"input": " 1 2\n", "output": "3\n", "explanation": "Small positive values"}] * 3
+        self.reply = json.dumps(cases)
+        self.assertEqual(generate_test_cases_by_limitations(self.problem), cases)
+        cases[0] = {"input": "1 2", "output": None, "explanation": "Missing output"}
+        self.reply = json.dumps(cases)
+        with self.assertRaises(LLMError):
+            generate_test_cases_by_limitations(self.problem)
+
+    def test_mock_provider_is_explicit_and_makes_no_network_calls(self):
+        with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}):
+            self.assertEqual(get_model_info()["model"], "mock-assistant")
+            self.assertEqual(generate_ai_problem()["provider"], "mock")
+            self.assertTrue(get_thinking_hints(self.problem)["success"])
+        self.assertEqual(self.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
-

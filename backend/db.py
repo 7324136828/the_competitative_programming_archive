@@ -8,6 +8,8 @@ from pathlib import Path
 import sqlite3
 from typing import Any, Generator
 
+from .executor import normalize_output
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS problems (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -31,6 +33,10 @@ CREATE TABLE IF NOT EXISTS submissions (
     output TEXT DEFAULT '',
     error TEXT DEFAULT '',
     test_results TEXT DEFAULT '[]',
+    verified INTEGER NOT NULL DEFAULT 0,
+    job_id TEXT,
+    phase TEXT NOT NULL DEFAULT 'completed',
+    grading TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY(problem_id) REFERENCES problems(id)
 );
@@ -40,6 +46,15 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     role TEXT NOT NULL,
     content TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS editor_drafts (
+    problem_id INTEGER NOT NULL,
+    language TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (problem_id, language),
+    FOREIGN KEY(problem_id) REFERENCES problems(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_problems_language ON problems(language);
 CREATE INDEX IF NOT EXISTS idx_problems_difficulty ON problems(difficulty);
@@ -69,7 +84,35 @@ def format_row(row: sqlite3.Row | None, json_fields: tuple[str, ...]) -> dict | 
 
 
 def format_problem(row: sqlite3.Row | None) -> dict | None:
-    return format_row(row, ("sample_input_output", "hints", "tags"))
+    problem = format_row(row, ("sample_input_output", "hints", "tags"))
+    if problem is not None:
+        problem["is_solved"] = bool(problem.get("is_solved", False))
+    return problem
+
+
+def verified_acceptance(submission: dict) -> bool:
+    """Only real, successful expected-output comparisons establish a solved problem."""
+    cases = submission.get("test_results")
+    return (
+        submission.get("status") == "Accepted"
+        and isinstance(cases, list)
+        and bool(cases)
+        and all(
+            isinstance(case, dict)
+            and case.get("passed") is True
+            and isinstance(case.get("expectedOutput"), str)
+            and isinstance(case.get("actualOutput", case.get("stdout")), str)
+            and normalize_output(case.get("actualOutput", case.get("stdout"))) == normalize_output(case["expectedOutput"])
+            for case in cases
+        )
+    )
+
+
+PROBLEM_SELECT = """SELECT problems.*, EXISTS (
+    SELECT 1 FROM submissions
+    WHERE submissions.problem_id = problems.id
+      AND submissions.status = 'Accepted' AND submissions.verified = 1
+) AS is_solved FROM problems"""
 
 
 class Database:
@@ -98,6 +141,23 @@ class Database:
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(problems)")}
             if "source" not in columns:
                 connection.execute("ALTER TABLE problems ADD COLUMN source TEXT")
+            submission_columns = {row["name"] for row in connection.execute("PRAGMA table_info(submissions)")}
+            for name, declaration in (
+                ("verified", "INTEGER NOT NULL DEFAULT 0"),
+                ("job_id", "TEXT"),
+                ("phase", "TEXT NOT NULL DEFAULT 'completed'"),
+                ("grading", "TEXT"),
+            ):
+                if name not in submission_columns:
+                    connection.execute(f"ALTER TABLE submissions ADD COLUMN {name} {declaration}")
+            connection.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_submissions_job_id ON submissions(job_id)")
+            if "verified" not in submission_columns:
+                for row in connection.execute("SELECT * FROM submissions WHERE status = 'Accepted'").fetchall():
+                    submission = format_row(row, ("test_results",))
+                    connection.execute(
+                        "UPDATE submissions SET verified = ? WHERE id = ?",
+                        (int(verified_acceptance(submission)), row["id"]),
+                    )
         return not existed
 
     def count(self) -> int:
@@ -135,7 +195,7 @@ class Database:
                 f"SELECT COUNT(*) FROM problems {where}", parameters
             ).fetchone()[0]
             rows = connection.execute(
-                f"SELECT * FROM problems {where} ORDER BY id ASC LIMIT ? OFFSET ?",
+                f"{PROBLEM_SELECT} {where} ORDER BY id ASC LIMIT ? OFFSET ?",
                 [*parameters, limit, offset],
             ).fetchall()
 
@@ -153,7 +213,7 @@ class Database:
         except (ValueError, TypeError):
             return None
         with self.connect() as connection:
-            row = connection.execute("SELECT * FROM problems WHERE id = ?", (pid,)).fetchone()
+            row = connection.execute(f"{PROBLEM_SELECT} WHERE id = ?", (pid,)).fetchone()
             return format_problem(row)
 
     def create_problem(self, problem: dict) -> dict:
@@ -211,8 +271,8 @@ class Database:
             cursor = connection.execute(
                 """
                 INSERT INTO submissions (problem_id, language, code, status,
-                                         runtime_ms, output, error, test_results)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                                         runtime_ms, output, error, test_results, verified, job_id, phase, grading)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     submission["problem_id"],
@@ -223,12 +283,54 @@ class Database:
                     submission.get("output", ""),
                     submission.get("error", ""),
                     json.dumps(submission.get("test_results", [])),
+                    int(verified_acceptance(submission)),
+                    submission.get("job_id"),
+                    submission.get("phase", "completed"),
+                    json.dumps(submission["grading"]) if submission.get("grading") is not None else None,
                 ),
             )
             row = connection.execute(
                 "SELECT * FROM submissions WHERE id = ?", (cursor.lastrowid,)
             ).fetchone()
-            return format_row(row, ("test_results",))  # type: ignore[return-value]
+            return format_row(row, ("test_results", "grading"))  # type: ignore[return-value]
+
+    def get_submission_job(self, job_id: str) -> dict | None:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM submissions WHERE job_id = ?", (job_id,)).fetchone()
+            return format_row(row, ("test_results", "grading"))
+
+    def update_submission_phase(self, job_id: str, phase: str) -> bool:
+        if phase not in ("compiling", "running"):
+            raise ValueError("Invalid submission phase.")
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE submissions SET phase = ?, status = ? WHERE job_id = ? AND phase != 'completed'",
+                (phase, phase.capitalize(), job_id),
+            )
+            return cursor.rowcount > 0
+
+    def finish_submission_job(self, job_id: str, grading: dict) -> dict | None:
+        results = grading.get("results", [])
+        first = results[0] if results else {}
+        verified = verified_acceptance({"status": grading["status"], "test_results": results})
+        with self.connect() as connection:
+            # UUID matching also makes an in-flight completion harmless after database.clear().
+            connection.execute(
+                """UPDATE submissions SET phase = 'completed', status = ?, runtime_ms = ?, output = ?,
+                    error = ?, test_results = ?, verified = ?, grading = ? WHERE job_id = ?""",
+                (
+                    grading["status"],
+                    grading.get("totalRuntimeMs", 0),
+                    first.get("actualOutput", first.get("stdout", "")),
+                    grading.get("error") or next((case["error"] for case in results if case.get("error")), ""),
+                    json.dumps(results),
+                    int(verified),
+                    json.dumps(grading),
+                    job_id,
+                ),
+            )
+            row = connection.execute("SELECT * FROM submissions WHERE job_id = ?", (job_id,)).fetchone()
+            return format_row(row, ("test_results", "grading"))
 
     def get_submissions(self, problem_id: int | str, limit: int = 20) -> list[dict]:
         try:
@@ -241,20 +343,65 @@ class Database:
                 "SELECT * FROM submissions WHERE problem_id = ? ORDER BY id DESC LIMIT ?",
                 (pid, limit),
             ).fetchall()
-            return [format_row(row, ("test_results",)) for row in rows]  # type: ignore[misc]
+            return [format_row(row, ("test_results", "grading")) for row in rows]  # type: ignore[misc]
+
+    def get_submission(self, submission_id: int | str) -> dict | None:
+        try:
+            identifier = int(submission_id)
+        except (ValueError, TypeError):
+            return None
+        with self.connect() as connection:
+            row = connection.execute(
+                """SELECT submissions.*, problems.title AS problem_title
+                   FROM submissions JOIN problems ON problems.id = submissions.problem_id
+                   WHERE submissions.id = ?""",
+                (identifier,),
+            ).fetchone()
+            return format_row(row, ("test_results", "grading"))
+
+    def list_submissions(self, page: int = 1, limit: int = 20, problem_id: int | None = None) -> dict:
+        """Paginate all verdicts, including in-flight and unsuccessful submissions."""
+        page = bounded_int(page, 1)
+        limit = bounded_int(limit, 20, maximum=100)
+        where = "WHERE submissions.problem_id = ?" if problem_id is not None else ""
+        parameters = [problem_id] if problem_id is not None else []
+        with self.connect() as connection:
+            # A read transaction keeps the count and page from disagreeing during a new submission.
+            connection.execute("BEGIN")
+            total = connection.execute(f"SELECT COUNT(*) FROM submissions {where}", parameters).fetchone()[0]
+            rows = connection.execute(
+                f"""SELECT submissions.*, problems.title AS problem_title
+                    FROM submissions JOIN problems ON problems.id = submissions.problem_id
+                    {where} ORDER BY submissions.id DESC LIMIT ? OFFSET ?""",
+                [*parameters, limit, (page - 1) * limit],
+            ).fetchall()
+        return {
+            "submissions": [format_row(row, ("test_results", "grading")) for row in rows],
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "totalPages": max(1, (total + limit - 1) // limit),
+        }
+
+    def iter_submissions(self) -> Generator[dict, None, None]:
+        """Read every submission from a single snapshot without the UI pagination cap."""
+        with self.connect() as connection:
+            connection.execute("BEGIN")
+            rows = connection.execute(
+                """SELECT submissions.*, problems.title AS problem_title
+                   FROM submissions JOIN problems ON problems.id = submissions.problem_id
+                   ORDER BY submissions.id ASC"""
+            )
+            for row in rows:
+                yield format_row(row, ("test_results", "grading"))  # type: ignore[misc]
 
     def clear(self) -> dict:
         with self.connect() as connection:
             deleted_problems = connection.execute("SELECT COUNT(*) FROM problems").fetchone()[0]
             deleted_submissions = connection.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
-            connection.executescript(
-                """
-                DELETE FROM submissions;
-                DELETE FROM problems;
-                DELETE FROM chat_messages;
-                DELETE FROM sqlite_sequence WHERE name IN ('problems', 'submissions', 'chat_messages');
-                """
-            )
+            connection.execute("DELETE FROM submissions")
+            connection.execute("DELETE FROM problems")
+            connection.execute("DELETE FROM chat_messages")
         return {
             "deletedProblems": deleted_problems,
             "deletedSubmissions": deleted_submissions,
@@ -278,4 +425,3 @@ class Database:
                 (session_id, limit),
             ).fetchall()
             return [dict(r) for r in rows]
-

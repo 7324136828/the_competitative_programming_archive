@@ -13,6 +13,7 @@ import signal
 import subprocess
 import tempfile
 import time
+from typing import Callable
 
 from .runtimes import discover_runtimes, language_id
 
@@ -211,7 +212,7 @@ def run_code(
                 "error": result["stderr"] or f"Process exited with code {result['exitCode']}",
             }
         actual = normalize_output(result["stdout"])
-        compare = expected_output is not None and expected_output != ""
+        compare = expected_output is not None
         passed = actual == normalize_output(expected_output) if compare else True
         return {
             **response,
@@ -223,25 +224,42 @@ def run_code(
         }
 
 
+def validate_test_cases(test_cases: list[dict] | None) -> None:
+    """Reject ungradable cases without discarding a legitimate empty output."""
+    if test_cases is None:
+        return
+    if not isinstance(test_cases, list):
+        raise ValueError("Test cases must be an array.")
+    if len(test_cases) > 100:
+        raise ValueError("A submission may contain at most 100 test cases.")
+    for case in test_cases:
+        if not isinstance(case, dict) or any(not isinstance(case.get(key), str) for key in ("input", "output")):
+            raise ValueError("Every test case requires input and expected output strings (empty strings are allowed).")
+
+
 def submit_code(
     language: str,
     code: str,
     test_cases: list[dict] | None = None,
     timeout_ms: int = DEFAULT_TIMEOUT_MS,
+    progress: Callable[[str], None] | None = None,
 ) -> dict:
     """Compile once, run each test, and preserve the first failing verdict."""
     timeout_ms = _timeout_ms(timeout_ms)
+    validate_test_cases(test_cases)
     if not test_cases:
-        single = run_code(language, code, timeout_ms=timeout_ms)
         return {
-            "status": "Accepted" if single["status"] == "Success" else single["status"],
-            "totalTests": 1,
-            "passedTests": int(single["passed"]),
-            "totalRuntimeMs": single["runtimeMs"],
-            "results": [single],
+            "status": "Not Judged",
+            "error": "No test cases are available. Add test inputs and expected outputs before submitting.",
+            "totalTests": 0,
+            "passedTests": 0,
+            "totalRuntimeMs": 0,
+            "results": [],
         }
 
     with tempfile.TemporaryDirectory(prefix="oj_sub_", ignore_cleanup_errors=True) as directory:
+        if progress:
+            progress("compiling")
         command, error, environment = _prepare_code(language, code, directory)
         if error or not command:
             return {
@@ -267,12 +285,16 @@ def submit_code(
         results = []
         status = "Accepted"
         for index, case in enumerate(test_cases, start=1):
+            if progress:
+                progress("running")
             execution = _run_process(command, directory, case.get("input", ""), timeout_ms, env=environment)
             result = {
                 "caseNumber": index,
                 "input": case.get("input"),
                 "expectedOutput": case.get("output"),
                 "actualOutput": execution["stdout"],
+                "stdout": execution["stdout"],
+                "stderr": execution["stderr"],
                 "runtimeMs": execution["runtimeMs"],
                 "passed": False,
             }
@@ -293,4 +315,3 @@ def submit_code(
             "totalRuntimeMs": round(sum(result["runtimeMs"] for result in results), 1),
             "results": results,
         }
-

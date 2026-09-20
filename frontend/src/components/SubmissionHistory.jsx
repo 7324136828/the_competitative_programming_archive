@@ -19,6 +19,10 @@ export default function SubmissionHistory({ submissions = [] }) {
       case 'Wrong Answer':
         return '#ef4743';
       case 'Time Limit Exceeded':
+      case 'Not Judged':
+      case 'Queued':
+      case 'Compiling':
+      case 'Running':
         return '#ffa116';
       default:
         return '#ff375f';
@@ -63,7 +67,7 @@ export default function SubmissionHistory({ submissions = [] }) {
                   alignItems: 'center',
                   gap: '0.3rem'
                 }}>
-                  {sub.status === 'Accepted' ? <CheckCircle2 size={15} /> : <XCircle size={15} />}
+                  {sub.status === 'Accepted' ? <CheckCircle2 size={15} /> : ['Queued', 'Compiling', 'Running', 'Not Judged'].includes(sub.status) ? <Clock size={15} /> : <XCircle size={15} />}
                   {sub.status}
                 </span>
 
@@ -127,9 +131,19 @@ export default function SubmissionHistory({ submissions = [] }) {
           }}>
             {selectedSub.code}
           </pre>
+          {(selectedSub.test_results || []).map((result, index) => (
+            <details key={index} style={{ marginTop: '0.6rem', fontSize: '0.8rem' }}>
+              <summary style={{ cursor: 'pointer', color: '#aaa' }}>Case {index + 1}: {result.status}</summary>
+              <div style={{ marginTop: '0.5rem' }}>Your output:</div>
+              <pre style={{ whiteSpace: 'pre-wrap' }}>{(result.actualOutput ?? result.stdout) || '<empty>'}</pre>
+              <div style={{ marginTop: '0.5rem' }}>Expected output:</div>
+              <pre style={{ whiteSpace: 'pre-wrap' }}>{result.expectedOutput == null ? 'Not provided; this case was not judged.' : result.expectedOutput || '<empty>'}</pre>
+              {(result.error || result.stderr) && <pre style={{ whiteSpace: 'pre-wrap', color: '#ff8d89' }}>{result.error || result.stderr}</pre>}
+            </details>
+          ))}
+          {selectedSub.error && <pre style={{ whiteSpace: 'pre-wrap', color: '#ff8d89', marginTop: '0.5rem', fontSize: '0.8rem' }}>{selectedSub.error}</pre>}
         </div>
       )}
     </div>
   );
 }
-

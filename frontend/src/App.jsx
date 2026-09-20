@@ -9,20 +9,27 @@ import TranslateModal from './components/TranslateModal';
 import GenerateProblemModal from './components/GenerateProblemModal';
 import UploadModal from './components/UploadModal';
 import ChatDrawer from './components/ChatDrawer';
+import LLMModel from './components/LLMModel';
+import SolveWorkspace from './components/SolveWorkspace';
+import SubmissionArchive from './components/SubmissionArchive';
+import SettingsView from './components/SettingsView';
+import useEditorDraft from './hooks/useEditorDraft';
 import { CODE_TEMPLATES, DEFAULT_LANGUAGE } from './utils/codeTemplates';
 import { clearDatabase, fetchProblem, runCode, submitCode, fetchSubmissions, fetchProblems, fetchLanguages } from './services/api';
 
 export default function App() {
-  const [view, setView] = useState('list'); // 'list' or 'solve'
+  const [view, setView] = useState('list');
   const [problemId, setProblemId] = useState(null);
   const [problem, setProblem] = useState(null);
   const [loadingProblem, setLoadingProblem] = useState(false);
   const [databaseVersion, setDatabaseVersion] = useState(0);
+  const [archiveVersion, setArchiveVersion] = useState(0);
   const [isClearingDatabase, setIsClearingDatabase] = useState(false);
   const [databaseNotice, setDatabaseNotice] = useState(null);
   const problemRequest = useRef(0);
   const databaseGeneration = useRef(0);
   const clearingDatabase = useRef(false);
+  const execution = useRef(null);
 
   // Editor State
   const [language, setLanguage] = useState(DEFAULT_LANGUAGE);
@@ -30,11 +37,7 @@ export default function App() {
   const [isLoadingLanguages, setIsLoadingLanguages] = useState(true);
   const [languagesError, setLanguagesError] = useState(null);
   const [languageDetectionVersion, setLanguageDetectionVersion] = useState(0);
-  const [codes, setCodes] = useState({
-    python: CODE_TEMPLATES.python,
-    cpp: CODE_TEMPLATES.cpp,
-    java: CODE_TEMPLATES.java
-  });
+  const draft = useEditorDraft(problemId, language, view === 'solve' && problem?.id === problemId && !loadingProblem);
 
   // Test Console State
   const [testCases, setTestCases] = useState([]);
@@ -44,6 +47,9 @@ export default function App() {
   const [submissions, setSubmissions] = useState([]);
   const [isRunning, setIsRunning] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [executionStatus, setExecutionStatus] = useState(null);
+
+  useEffect(() => () => execution.current?.abort(), []);
 
   // Modals & AI State
   const [isUploadOpen, setIsUploadOpen] = useState(false);
@@ -84,7 +90,14 @@ export default function App() {
   // Load problem details
   const loadProblemData = async (id) => {
     const request = ++problemRequest.current;
+    execution.current?.abort();
+    setIsRunning(false);
+    setIsSubmitting(false);
+    setExecutionStatus(null);
     setLoadingProblem(true);
+    setProblem(null);
+    setTestCases([]);
+    setSubmissions([]);
     setRunResult(null);
     setSubmissionResult(null);
     setTranslatedData(null);
@@ -93,7 +106,7 @@ export default function App() {
       if (request !== problemRequest.current) return;
       if (res.success && res.problem) {
         setProblem(res.problem);
-        setTestCases(res.problem.sample_input_output || [{ input: '', output: '' }]);
+        setTestCases(res.problem.sample_input_output || []);
       }
       // Load submissions
       const subRes = await fetchSubmissions(id);
@@ -116,6 +129,7 @@ export default function App() {
 
   const handleSelectProblem = (id) => {
     if (clearingDatabase.current) return;
+    if (id !== problemId) execution.current?.abort();
     setProblemId(id);
     setView('solve');
   };
@@ -138,7 +152,7 @@ export default function App() {
 
   const handleClearDatabase = async () => {
     if (clearingDatabase.current || isRunning || isSubmitting || isUploadOpen || isTranslateOpen || isGenerateOpen) return;
-    if (!window.confirm('Permanently delete ALL problems and submission history from the database? Your current workspace will also be reset. This cannot be undone.')) return;
+    if (!window.confirm('Permanently delete ALL problems, submission history, and saved editor draft references from the database? Your current workspace will also be reset. This cannot be undone.')) return;
 
     clearingDatabase.current = true;
     setIsClearingDatabase(true);
@@ -158,7 +172,7 @@ export default function App() {
       setSubmissions([]);
       setConsoleTab('testcase');
       setLanguage(availableLanguages.find(item => item.id === DEFAULT_LANGUAGE)?.id || availableLanguages[0]?.id || '');
-      setCodes({ ...CODE_TEMPLATES });
+      draft.clear();
       setIsUploadOpen(false);
       setIsTranslateOpen(false);
       setIsGenerateOpen(false);
@@ -182,34 +196,45 @@ export default function App() {
   };
 
   const handleCodeChange = (newCode) => {
-    if (!isLanguageAvailable) return;
-    setCodes(prev => ({
-      ...prev,
-      [language]: newCode
-    }));
+    if (!isLanguageAvailable || !draft.ready) return;
+    draft.change(newCode);
+  };
+
+  const handleImportCode = async (source, isCurrent) => {
+    if (!isLanguageAvailable || !draft.ready || clearingDatabase.current) return false;
+    const imported = await draft.importCode(source.language, source.code, isCurrent);
+    if (imported) setLanguage(source.language);
+    return imported;
   };
 
   // Run code against active testcase
   const handleRunCode = async () => {
-    if (clearingDatabase.current || !isLanguageAvailable || isRunning || isSubmitting) return;
+    if (!problem || loadingProblem || clearingDatabase.current || !draft.ready || !isLanguageAvailable || isRunning || isSubmitting) return;
+    const controller = new AbortController();
+    execution.current = controller;
+    const request = problemRequest.current;
     setIsRunning(true);
+    setRunResult(null);
     setSubmissionResult(null);
+    setExecutionStatus(language === 'cpp' || language === 'java' ? 'Compiling and running code...' : 'Running code...');
     setConsoleTab('result');
 
-    const activeCase = testCases[0] || { input: '', output: '' };
+    const activeCase = testCases[0] || { input: '' };
     try {
       const res = await runCode({
         language,
-        code: codes[language],
+        code: draft.code,
         input: activeCase.input,
         expectedOutput: activeCase.output,
         timeoutMs: 5000
-      });
+      }, { signal: controller.signal });
 
+      if (controller.signal.aborted || request !== problemRequest.current) return;
       if (res.success) {
         setRunResult(res.result);
       }
     } catch (err) {
+      if (controller.signal.aborted || request !== problemRequest.current) return;
       setRunResult({
         status: 'Runtime Error',
         error: err.message,
@@ -217,31 +242,59 @@ export default function App() {
         runtimeMs: 0
       });
     } finally {
-      setIsRunning(false);
+      if (!controller.signal.aborted && request === problemRequest.current) {
+        setIsRunning(false);
+        setExecutionStatus(null);
+      }
     }
   };
 
   // Submit code against all problem test cases
   const handleSubmitCode = async () => {
-    if (!problem || clearingDatabase.current || !isLanguageAvailable || isRunning || isSubmitting) return;
+    if (!problem || loadingProblem || clearingDatabase.current || !draft.ready || !isLanguageAvailable || isRunning || isSubmitting) return;
+    const controller = new AbortController();
+    execution.current = controller;
+    const request = problemRequest.current;
     setIsSubmitting(true);
     setRunResult(null);
+    setSubmissionResult(null);
+    setExecutionStatus('Queued for judging...');
     setConsoleTab('result');
 
     try {
       const res = await submitCode({
         problemId: problem.id,
         language,
-        code: codes[language],
+        code: draft.code,
         customTestCases: testCases
+      }, {
+        signal: controller.signal,
+        onProgress: job => {
+          if (controller.signal.aborted || request !== problemRequest.current) return;
+          const labels = { queued: 'Queued for judging...', compiling: 'Compiling code...', running: 'Running test cases...' };
+          setExecutionStatus(labels[job.phase] || job.status || 'Judging submission...');
+        }
       });
 
+      if (controller.signal.aborted || request !== problemRequest.current) return;
       if (res.success) {
         setSubmissionResult(res);
+        setExecutionStatus(null);
+
+        if (res.grading?.status === 'Accepted') {
+          setProblem(current => current?.id === problem.id ? { ...current, is_solved: true } : current);
+          setArchiveVersion(version => version + 1);
+        }
 
         // Refresh submission history
-        const subRes = await fetchSubmissions(problem.id);
-        if (subRes.success) {
+        const subRes = await fetchSubmissions(problem.id).catch(err => {
+          if (!controller.signal.aborted && request === problemRequest.current) {
+            setDatabaseNotice({ type: 'error', message: `Submission finished, but history could not refresh: ${err.message}` });
+          }
+          return null;
+        });
+        if (controller.signal.aborted || request !== problemRequest.current) return;
+        if (subRes?.success) {
           setSubmissions(subRes.submissions);
         }
 
@@ -255,17 +308,21 @@ export default function App() {
         }
       }
     } catch (err) {
+      if (controller.signal.aborted || request !== problemRequest.current) return;
       setSubmissionResult({
         grading: {
-          status: 'Runtime Error',
-          totalTests: 1,
+          status: 'Submission Error',
+          totalTests: 0,
           passedTests: 0,
           totalRuntimeMs: 0,
           error: err.message
         }
       });
     } finally {
-      setIsSubmitting(false);
+      if (!controller.signal.aborted && request === problemRequest.current) {
+        setIsSubmitting(false);
+        setExecutionStatus(null);
+      }
     }
   };
 
@@ -274,7 +331,10 @@ export default function App() {
       {/* Top Navbar */}
       <Navbar
         currentView={view}
-        onViewChange={setView}
+        onViewChange={nextView => {
+          setView(nextView);
+          if (nextView === 'settings') setIsChatOpen(false);
+        }}
         currentProblem={problem}
         onRandomProblem={handleRandomProblem}
         onOpenUpload={() => setIsUploadOpen(true)}
@@ -285,6 +345,8 @@ export default function App() {
         onToggleChat={() => setIsChatOpen(!isChatOpen)}
         isChatOpen={isChatOpen}
       />
+
+      <div style={{ padding: '0.35rem 1.25rem', backgroundColor: '#202020', borderBottom: '1px solid #333' }}><LLMModel /></div>
 
       {databaseNotice && (
         <div
@@ -297,17 +359,18 @@ export default function App() {
       )}
 
       {/* Main Content Area */}
-      <main inert={isClearingDatabase} aria-busy={isClearingDatabase} style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <main inert={isClearingDatabase} aria-busy={isClearingDatabase} style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         {view === 'list' ? (
           <div style={{ flex: 1, overflowY: 'auto' }}>
-            <ProblemList key={databaseVersion} onSelectProblem={handleSelectProblem} />
+            <ProblemList key={`${databaseVersion}-${archiveVersion}`} onSelectProblem={handleSelectProblem} />
           </div>
+        ) : view === 'submissions' ? (
+          <SubmissionArchive key={databaseVersion} onSelectProblem={handleSelectProblem} />
+        ) : view === 'settings' ? (
+          <SettingsView />
         ) : (
-          /* Split Solve View: Left Problem Detail, Right Editor + Console */
-          <div style={{ display: 'grid', gridTemplateColumns: '48% 52%', height: '100%', overflow: 'hidden' }}>
-            {/* Left Pane: Problem Details & AI Assist */}
-            <div style={{ height: '100%', overflow: 'hidden', borderRight: '1px solid #333' }}>
-              {loadingProblem ? (
+          <SolveWorkspace
+            problem={loadingProblem ? (
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#888' }}>
                   Loading problem statement...
                 </div>
@@ -321,11 +384,7 @@ export default function App() {
                   onResetTranslation={() => setTranslatedData(null)}
                 />
               )}
-            </div>
-
-            {/* Right Pane: CodeMirror Editor (Top) & Test Console (Bottom) */}
-            <div style={{ display: 'grid', gridTemplateRows: '58% 42%', height: '100%', overflow: 'hidden' }}>
-              {/* CodeMirror Code Editor */}
+            editor={
               <CodeEditor
                 language={language}
                 availableLanguages={availableLanguages}
@@ -333,16 +392,21 @@ export default function App() {
                 languagesError={languagesError}
                 onRetryLanguages={() => setLanguageDetectionVersion(version => version + 1)}
                 onLanguageChange={handleLanguageChange}
-                code={codes[language] || ''}
+                code={draft.code}
                 onCodeChange={handleCodeChange}
+                onImportCode={handleImportCode}
+                draft={draft}
                 onRun={handleRunCode}
                 onSubmit={handleSubmitCode}
                 isRunning={isRunning}
                 isSubmitting={isSubmitting}
+                executionDisabled={loadingProblem || !problem || !draft.ready}
               />
 
-              {/* Bottom Test & Results Console */}
+            }
+            tests={
               <TestConsole
+                key={problem?.id || 'empty'}
                 testCases={testCases}
                 onTestCasesChange={setTestCases}
                 activeTab={consoleTab}
@@ -352,9 +416,10 @@ export default function App() {
                 problemId={problem ? problem.id : null}
                 problem={problem}
                 submissions={submissions}
+                executionStatus={executionStatus}
               />
-            </div>
-          </div>
+            }
+          />
         )}
       </main>
 
@@ -362,14 +427,14 @@ export default function App() {
       <ChatDrawer
         isOpen={isChatOpen}
         onClose={() => setIsChatOpen(false)}
-        problem={problem}
-        code={codes[language] || ''}
-        language={language}
+        currentProblem={problem}
+        currentCode={draft.code}
+        currentLanguage={language}
       />
 
       {/* Modals */}
       <TranslateModal
-        key={`translate-${databaseVersion}`}
+        key={`translate-${databaseVersion}-${problem?.id}`}
         isOpen={isTranslateOpen}
         onClose={() => setIsTranslateOpen(false)}
         problem={problem}
@@ -377,12 +442,13 @@ export default function App() {
       />
 
       <GenerateProblemModal
-        key={`generate-${databaseVersion}`}
+        key={`generate-${databaseVersion}-${problem?.id}`}
         isOpen={isGenerateOpen}
         onClose={() => setIsGenerateOpen(false)}
         problem={problem}
         onProblemCreated={(newProb) => {
           setIsGenerateOpen(false);
+          setDatabaseVersion(version => version + 1);
           handleSelectProblem(newProb.id);
         }}
       />
@@ -400,4 +466,3 @@ export default function App() {
     </div>
   );
 }
-

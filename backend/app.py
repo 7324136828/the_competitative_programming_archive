@@ -7,23 +7,29 @@ import json
 import os
 from pathlib import Path
 import threading
+from typing import Any
 
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request, send_file, send_from_directory
 from werkzeug.exceptions import HTTPException, NotFound, RequestEntityTooLarge
 
 from .db import Database, bounded_int
-from .executor import run_code, submit_code
+from .executor import run_code, submit_code, validate_test_cases
+from .jobs import SubmissionJobs, SubmissionQueueFull
 from .llm import (
+    LLMError,
     chat_response,
     generate_ai_problem,
     generate_test_cases_by_limitations,
     get_recommendations,
+    get_model_info,
     get_thinking_hints,
     translate_problem,
 )
-from .paths import ROOT, default_database_path
+from .paths import ROOT, default_database_path, default_storage_path
 from .runtimes import available_languages
 from .seed import seed_database
+from .storage import DraftConflict, DraftProblemNotFound, DraftStore, export_submissions
+from .audio import AudioError, AudioQueueFull, AudioStore
 
 
 def json_object() -> dict:
@@ -40,7 +46,9 @@ def normalize_samples(samples: Any) -> list[dict[str, str]]:
     for sample in samples:
         if not isinstance(sample, dict):
             raise ValueError("Each sample must contain input and output strings.")
-        item = {key: str(sample.get(key, "")) for key in ("input", "output")}
+        if any(key not in sample or not isinstance(sample[key], str) for key in ("input", "output")):
+            raise ValueError("Each sample must contain input and expected output strings; empty strings are allowed.")
+        item = {key: sample[key] for key in ("input", "output")}
         normalized.append(item)
     return normalized
 
@@ -107,6 +115,15 @@ def create_app(config: dict | None = None) -> Flask:
         SEED_PATH=str(ROOT / "problem.json"),
         CLIENT_DIST=str(ROOT / "frontend" / "dist"),
         MAX_CONTENT_LENGTH=max_upload_mb * 1024 * 1024,
+        SUBMISSION_WORKERS=2,
+        SUBMISSION_MAX_PENDING=16,
+        WORKSPACE_STORAGE_DIR=os.environ.get("WORKSPACE_STORAGE_DIR") or None,
+        KOKORO_BASE_URL=os.environ.get("KOKORO_BASE_URL", "http://127.0.0.1:8880"),
+        KOKORO_MODEL=os.environ.get("KOKORO_MODEL", "kokoro"),
+        KOKORO_VOICE=os.environ.get("KOKORO_VOICE", ""),
+        KOKORO_LANGUAGE=os.environ.get("KOKORO_LANGUAGE", "auto"),
+        KOKORO_SPEED=os.environ.get("KOKORO_SPEED", "1.0"),
+        KOKORO_TIMEOUT_SECONDS=os.environ.get("KOKORO_TIMEOUT_SECONDS", "180"),
     )
     if config:
         app.config.update(config)
@@ -117,6 +134,26 @@ def create_app(config: dict | None = None) -> Flask:
     if is_new_database and app.config["AUTO_SEED"]:
         seed_database(database, app.config["SEED_PATH"])
     app.extensions["database"] = database
+    jobs = SubmissionJobs(
+        database,
+        max_workers=app.config["SUBMISSION_WORKERS"],
+        max_pending=app.config["SUBMISSION_MAX_PENDING"],
+    )
+    app.extensions["submission_jobs"] = jobs
+    storage_root = Path(app.config["WORKSPACE_STORAGE_DIR"] or default_storage_path(app.config["DATABASE_PATH"]))
+    app.config["WORKSPACE_STORAGE_DIR"] = str(storage_root)
+    drafts = DraftStore(database, storage_root / "drafts")
+    audio = AudioStore(
+        storage_root / "audio",
+        base_url=app.config["KOKORO_BASE_URL"],
+        model=app.config["KOKORO_MODEL"],
+        voice=app.config["KOKORO_VOICE"],
+        language=app.config["KOKORO_LANGUAGE"],
+        speed=float(app.config["KOKORO_SPEED"]),
+        timeout_seconds=float(app.config["KOKORO_TIMEOUT_SECONDS"]),
+    )
+    app.extensions["draft_store"] = drafts
+    app.extensions["audio_store"] = audio
 
     mutation_lock = threading.RLock()
 
@@ -157,6 +194,30 @@ def create_app(config: dict | None = None) -> Flask:
     def invalid_request(error):
         return jsonify(success=False, error=str(error)), 400
 
+    @app.errorhandler(DraftConflict)
+    def draft_conflict(error):
+        return jsonify(success=False, error=str(error), draft=error.current), 409
+
+    @app.errorhandler(DraftProblemNotFound)
+    def draft_problem_missing(error):
+        return jsonify(success=False, error="Problem not found."), 404
+
+    @app.errorhandler(LLMError)
+    def llm_error(error):
+        return jsonify(success=False, error=str(error)), error.status_code
+
+    @app.errorhandler(SubmissionQueueFull)
+    def judge_busy(error):
+        return jsonify(success=False, error=str(error)), 503, {"Retry-After": "2"}
+
+    @app.errorhandler(AudioQueueFull)
+    def audio_busy(error):
+        return jsonify(success=False, error=str(error)), 429, {"Retry-After": "2"}
+
+    @app.errorhandler(AudioError)
+    def audio_error(error):
+        return jsonify(success=False, error=str(error)), 503
+
     @app.errorhandler(Exception)
     def server_error(error):
         app.logger.exception("Request failed")
@@ -174,6 +235,10 @@ def create_app(config: dict | None = None) -> Flask:
     def languages():
         return jsonify(success=True, languages=available_languages())
 
+    @app.get("/api/llm/models")
+    def llm_models():
+        return jsonify(get_model_info(request.args.get("model")))
+
     @app.get("/api/problems")
     def list_problems():
         arguments = {
@@ -190,6 +255,62 @@ def create_app(config: dict | None = None) -> Flask:
     @app.get("/api/problems/<int:problem_id>")
     def problem_detail(problem_id: int):
         return jsonify(success=True, problem=find_problem(problem_id))
+
+    @app.get("/api/problems/<int:problem_id>/drafts/<string:language>")
+    def read_draft(problem_id: int, language: str):
+        return jsonify(success=True, draft=drafts.get(problem_id, language))
+
+    @app.put("/api/problems/<int:problem_id>/drafts/<string:language>")
+    def save_draft(problem_id: int, language: str):
+        data = json_object()
+        with mutation_lock:
+            draft = drafts.save(problem_id, language, data.get("code"), data.get("revision"))
+        return jsonify(success=True, draft=draft)
+
+    def audio_response(result: dict):
+        if result["status"] == "ready":
+            result = {**result, "url": f'/api/audio/{result["key"]}.mp3'}
+        return jsonify(success=True, audio=result)
+
+    @app.get("/api/problems/<int:problem_id>/audio")
+    def read_problem_audio(problem_id: int):
+        return audio_response(audio.get(find_problem(problem_id)))
+
+    @app.post("/api/problems/<int:problem_id>/audio")
+    def generate_problem_audio(problem_id: int):
+        result = audio.start(find_problem(problem_id))
+        return audio_response(result), (200 if result["status"] == "ready" else 202)
+
+    @app.post("/api/audio/responses")
+    def generate_response_audio():
+        data = json_object()
+        result = audio.start_text(data.get("text"), language=data.get("language", "en"))
+        return audio_response(result), (200 if result["status"] == "ready" else 202)
+
+    @app.get("/api/audio/responses/<string:key>")
+    def read_response_audio(key: str):
+        return audio_response(audio.get_by_key(key))
+
+    @app.get("/api/audio/cache")
+    def audio_cache_info():
+        return jsonify(success=True, cache=audio.cache_info())
+
+    @app.delete("/api/audio/cache")
+    def clear_audio_cache():
+        return jsonify(success=True, cache=audio.clear_cache())
+
+    @app.get("/api/audio/<string:key>.mp3")
+    def audio_file(key: str):
+        path = audio.path_for(key)
+        if path is None:
+            raise NotFound("Audio file not found.")
+        # Revalidate the file so clearing saved narration also invalidates old
+        # player URLs while preserving range requests and conditional responses.
+        try:
+            return send_file(path, mimetype="audio/mpeg", conditional=True, max_age=0)
+        except FileNotFoundError as error:
+            # Cleanup may remove the file after path_for checks it.
+            raise NotFound("Audio file not found.") from error
 
     @app.post("/api/problems")
     def create_problem():
@@ -233,7 +354,7 @@ def create_app(config: dict | None = None) -> Flask:
         return jsonify(
             success=True,
             **counts,
-            message="All problems and submission history have been deleted.",
+            message="All problems, draft references, and submission history have been deleted.",
         )
 
     @app.post("/api/run")
@@ -259,12 +380,20 @@ def create_app(config: dict | None = None) -> Flask:
         custom_cases = data.get("customTestCases")
         if custom_cases is not None:
             custom_cases = normalize_samples(custom_cases)
+        asynchronous = data.get("async", False)
+        if not isinstance(asynchronous, bool):
+            raise ValueError("async must be a boolean.")
         with mutation_lock:
             problem = find_problem(data.get("problemId"))
+            test_cases = custom_cases if custom_cases is not None else problem["sample_input_output"]
+            validate_test_cases(test_cases)
+            if asynchronous:
+                job = jobs.start(problem["id"], data["language"], data["code"], test_cases, 5000)
+                return jsonify(success=True, **job), 202
             grading = submit_code(
                 data["language"],
                 data["code"],
-                custom_cases or problem["sample_input_output"],
+                test_cases,
                 5000,
             )
             results = grading.get("results", [])
@@ -283,11 +412,42 @@ def create_app(config: dict | None = None) -> Flask:
             )
         return jsonify(success=True, submission=submission, grading=grading)
 
+    @app.get("/api/submission-jobs/<string:job_id>")
+    def submission_job(job_id: str):
+        job = jobs.get(job_id)
+        if job is None:
+            raise NotFound("Submission job not found.")
+        return jsonify(success=True, **job)
+
     @app.get("/api/submissions/<int:problem_id>")
     def submission_history(problem_id: int):
         return jsonify(
             success=True,
             submissions=database.get_submissions(problem_id, request.args.get("limit", 20)),
+        )
+
+    @app.get("/api/submissions")
+    def all_submissions():
+        return jsonify(success=True, **database.list_submissions(
+            page=request.args.get("page", 1),
+            limit=request.args.get("limit", 20),
+            problem_id=request.args.get("problemId"),
+        ))
+
+    @app.get("/api/submission-records/<int:submission_id>")
+    def submission_detail(submission_id: int):
+        submission = database.get_submission(submission_id)
+        if submission is None:
+            raise NotFound("Submission not found.")
+        return jsonify(success=True, submission=submission)
+
+    @app.get("/api/submissions/export.zip")
+    def download_submissions():
+        archive = export_submissions(database)
+        return send_file(
+            archive, mimetype="application/zip", as_attachment=True,
+            download_name=f'codejudge-submissions-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.zip',
+            max_age=0,
         )
 
     @app.post("/api/translate-problem")
@@ -303,7 +463,7 @@ def create_app(config: dict | None = None) -> Flask:
         target = data.get("targetLanguage") or "en"
         if not isinstance(target, str):
             raise ValueError("targetLanguage must be a string.")
-        return jsonify(translate_problem(problem, target))
+        return jsonify(translate_problem(problem, target, model=data.get("model")))
 
     # Requirement (3): Provide hints in terms of 5-10 programming thinking steps
     @app.post("/api/llm/hint")
@@ -312,7 +472,7 @@ def create_app(config: dict | None = None) -> Flask:
         data = json_object()
         problem = find_problem(data.get("problemId"))
         hint_level = data.get("hintLevel", 1)
-        return jsonify(get_thinking_hints(problem, hint_level))
+        return jsonify(get_thinking_hints(problem, hint_level, model=data.get("model")))
 
     @app.post("/api/llm/recommendations")
     @app.post("/api/recommendations")
@@ -326,8 +486,10 @@ def create_app(config: dict | None = None) -> Flask:
     def generate_testcases():
         data = json_object()
         problem = find_problem(data.get("problemId"))
-        cases = generate_test_cases_by_limitations(problem)
-        return jsonify(success=True, problemId=problem["id"], testCases=cases)
+        model_info = get_model_info(data.get("model"))
+        cases = generate_test_cases_by_limitations(problem, model=model_info["model"])
+        return jsonify(success=True, problemId=problem["id"], testCases=cases,
+                       provider=model_info["provider"], model=model_info["model"])
 
     # Requirement (2): Generate new problems (language="ai", source="unknown") into database
     @app.post("/api/llm/generate-problem")
@@ -335,23 +497,25 @@ def create_app(config: dict | None = None) -> Flask:
     @app.post("/api/generate-similar")
     def generate_problem_endpoint():
         data = json_object()
-        with mutation_lock:
-            current = database.get_problem(data["problemId"]) if data.get("problemId") else None
-            difficulty = data.get("difficulty") or (current.get("difficulty") if current else "Medium")
-            generated = generate_ai_problem(current, difficulty=difficulty, topic=data.get("topic"))
-            # Make sure new problems are under the language of ai and the source is unknown
-            generated["language"] = "ai"
-            generated["source"] = "unknown"
-            # Save into database (autoSave defaults to True for generate-problem)
-            auto_save = data.get("autoSave", True)
-            saved = None
-            if auto_save:
+        current = find_problem(data["problemId"]) if data.get("problemId") else None
+        difficulty = data.get("difficulty") or (current.get("difficulty") if current else "Medium")
+        auto_save = data.get("autoSave", True)
+        if not isinstance(auto_save, bool):
+            raise ValueError("autoSave must be a boolean.")
+        model_info = get_model_info(data.get("model"))
+        generated = generate_ai_problem(current, difficulty=difficulty, topic=data.get("topic"), model=model_info["model"])
+        generated["language"] = "ai"
+        generated["source"] = "unknown"
+        saved = None
+        if auto_save:
+            with mutation_lock:
                 saved = database.create_problem(normalize_problem(generated))
         return jsonify(
             success=True,
-            provider="the_connector",
+            provider=model_info["provider"],
+            model=model_info["model"],
             generatedProblem=generated,
-            savedProblem=saved or generated,
+            savedProblem=saved,
         )
 
     # Chat functionality
@@ -370,7 +534,7 @@ def create_app(config: dict | None = None) -> Flask:
         code = data.get("code")
         language_selected = data.get("language")
 
-        result = chat_response(messages, current_prob, code, language_selected)
+        result = chat_response(messages, current_prob, code, language_selected, model=data.get("model"))
         # Persist messages in database
         database.save_chat_message("user", messages[-1]["content"], session_id)
         database.save_chat_message("assistant", result["reply"], session_id)
@@ -416,4 +580,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

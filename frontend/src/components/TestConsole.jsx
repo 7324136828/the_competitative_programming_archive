@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Terminal, CheckCircle2, XCircle, AlertTriangle, Clock, Plus, Trash2, History, Sparkles, Loader2 } from 'lucide-react';
 import SubmissionHistory from './SubmissionHistory';
 import { generateTestCases } from '../services/api';
+import LLMModel, { useLLMModel } from './LLMModel';
 
 export default function TestConsole({
   testCases,
@@ -11,14 +12,24 @@ export default function TestConsole({
   runResult,
   submissionResult,
   problemId,
-  submissions
+  submissions,
+  executionStatus
 }) {
   const [selectedCaseIdx, setSelectedCaseIdx] = useState(0);
   const [isGeneratingCases, setIsGeneratingCases] = useState(false);
   const [generateError, setGenerateError] = useState(null);
+  const [usedModel, setUsedModel] = useState(null);
+  const { model, ready } = useLLMModel();
+  const active = useRef(true);
+  const latestCases = useRef(testCases);
+  latestCases.current = testCases;
+  useEffect(() => {
+    active.current = true;
+    return () => { active.current = false; };
+  }, []);
 
   const handleAddCase = () => {
-    const newCases = [...(testCases || []), { input: '', output: '' }];
+    const newCases = [...(testCases || []), { input: '' }];
     onTestCasesChange(newCases);
     setSelectedCaseIdx(newCases.length - 1);
   };
@@ -40,20 +51,24 @@ export default function TestConsole({
   };
 
   const handleGenerateTestCases = async () => {
-    if (!problemId || isGeneratingCases) return;
+    if (!problemId || isGeneratingCases || !ready) return;
     setIsGeneratingCases(true);
     setGenerateError(null);
     try {
-      const res = await generateTestCases({ problemId });
+      const res = await generateTestCases({ problemId, model });
+      if (!active.current) return;
       if (res.success && Array.isArray(res.testCases) && res.testCases.length > 0) {
-        const appended = [...(testCases || []), ...res.testCases];
+        const appended = [...(latestCases.current || []), ...res.testCases];
         onTestCasesChange(appended);
-        setSelectedCaseIdx(testCases ? testCases.length : 0);
+        setSelectedCaseIdx(latestCases.current?.length || 0);
+        setUsedModel(res.model || model);
+      } else {
+        throw new Error('The AI returned no usable test cases. Please try again.');
       }
     } catch (err) {
-      setGenerateError(err.message);
+      if (active.current) setGenerateError(err.message);
     } finally {
-      setIsGeneratingCases(false);
+      if (active.current) setIsGeneratingCases(false);
     }
   };
 
@@ -72,13 +87,15 @@ export default function TestConsole({
           </span>
         );
       case 'Time Limit Exceeded':
+      case 'Not Judged':
         return (
           <span className="badge badge-warning" style={{ display: 'flex', gap: '0.3rem' }}>
-            <Clock size={13} /> Time Limit Exceeded
+            <Clock size={13} /> {status}
           </span>
         );
       case 'Compilation Error':
       case 'Runtime Error':
+      case 'Submission Error':
         return (
           <span className="badge badge-wrong" style={{ display: 'flex', gap: '0.3rem' }}>
             <AlertTriangle size={13} /> {status}
@@ -102,7 +119,7 @@ export default function TestConsole({
       borderTop: '1px solid #333'
     }}>
       {/* Console Tab Headers */}
-      <div style={{
+      <div className="test-console-toolbar" style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
@@ -182,7 +199,7 @@ export default function TestConsole({
             {/* Requirement (1): Generate Test Cases by Limitations */}
             <button
               onClick={handleGenerateTestCases}
-              disabled={!problemId || isGeneratingCases}
+              disabled={!problemId || isGeneratingCases || !ready}
               className="btn btn-secondary"
               title="Generate boundary and edge cases matching problem limitations"
               style={{
@@ -210,6 +227,7 @@ export default function TestConsole({
         )}
       </div>
 
+      {activeTab === 'testcase' && <div style={{ padding: '0.3rem 0.85rem', borderBottom: '1px solid #333' }}><LLMModel usedModel={usedModel} /></div>}
       {generateError && (
         <div style={{ padding: '0.35rem 0.85rem', backgroundColor: '#381616', color: '#ff8d89', fontSize: '0.75rem' }}>
           Failed to generate test cases: {generateError}
@@ -276,6 +294,7 @@ export default function TestConsole({
           </div>
 
           {/* Selected Case Inputs */}
+          {!testCases?.length && <p style={{ padding: '1rem', color: '#aaa', fontSize: '0.8rem' }}>No test cases are available. Add a case with input and expected output, or generate edge cases before submitting for a verdict.</p>}
           {testCases && testCases[selectedCaseIdx] && (
             <div style={{ flex: 1, padding: '0.75rem 1rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
               {testCases[selectedCaseIdx].explanation && (
@@ -304,7 +323,7 @@ export default function TestConsole({
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-                <label style={{ fontSize: '0.75rem', color: '#888', fontWeight: 500 }}>Expected Output (optional):</label>
+                <label style={{ fontSize: '0.75rem', color: '#888', fontWeight: 500 }}>Expected Output (needed for a verdict):</label>
                 <textarea
                   value={testCases[selectedCaseIdx].output || ''}
                   onChange={(e) => handleCaseChange('output', e.target.value)}
@@ -321,6 +340,16 @@ export default function TestConsole({
                   }}
                   placeholder="Enter expected output..."
                 />
+                {(testCases[selectedCaseIdx].output == null || testCases[selectedCaseIdx].output === '') && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.75rem', color: '#aaa' }}>
+                    <input
+                      type="checkbox"
+                      checked={testCases[selectedCaseIdx].output === ''}
+                      onChange={(event) => handleCaseChange('output', event.target.checked ? '' : undefined)}
+                    />
+                    Expected output is intentionally empty
+                  </label>
+                )}
               </div>
             </div>
           )}
@@ -330,6 +359,11 @@ export default function TestConsole({
       {/* Tab 2: Test Result Tab */}
       {activeTab === 'result' && (
         <div style={{ flex: 1, padding: '1rem', overflowY: 'auto' }}>
+          {executionStatus && (
+            <div role="status" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#ffa116', fontSize: '0.85rem' }}>
+              <Loader2 size={16} className="animate-spin" />{executionStatus}
+            </div>
+          )}
           {/* Submission Result Verdict */}
           {submissionResult && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
@@ -360,6 +394,16 @@ export default function TestConsole({
                   {submissionResult.grading.error}
                 </div>
               )}
+              {(submissionResult.grading?.results || submissionResult.submission?.test_results || []).map((result, index) => (
+                <details key={index} open={result.passed === false} style={{ backgroundColor: '#181818', border: '1px solid #333', padding: '0.55rem', borderRadius: '0.35rem', fontSize: '0.8rem' }}>
+                  <summary style={{ cursor: 'pointer', color: result.passed === true ? '#2cbb5d' : '#bbb' }}>Case {index + 1}: {result.status}{result.runtimeMs != null ? ` (${result.runtimeMs} ms)` : ''}</summary>
+                  <div style={{ marginTop: '0.5rem' }}>Your output:</div>
+                  <pre style={{ whiteSpace: 'pre-wrap' }}>{(result.actualOutput ?? result.stdout) || '<empty>'}</pre>
+                  <div style={{ marginTop: '0.5rem' }}>Expected output:</div>
+                  <pre style={{ whiteSpace: 'pre-wrap' }}>{result.expectedOutput == null ? 'Not provided; this case was not judged.' : result.expectedOutput || '<empty>'}</pre>
+                  {(result.error || result.stderr) && <pre style={{ whiteSpace: 'pre-wrap', color: '#ff8d89' }}>{result.error || result.stderr}</pre>}
+                </details>
+              ))}
             </div>
           )}
 
@@ -420,7 +464,7 @@ export default function TestConsole({
             </div>
           )}
 
-          {!runResult && !submissionResult && (
+          {!runResult && !submissionResult && !executionStatus && (
             <div style={{ color: '#888', fontSize: '0.825rem', textAlign: 'center', padding: '2rem 0' }}>
               Run code against custom input or Submit to evaluate all test cases.
             </div>
@@ -437,4 +481,3 @@ export default function TestConsole({
     </div>
   );
 }
-

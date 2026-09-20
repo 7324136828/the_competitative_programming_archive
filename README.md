@@ -1,5 +1,8 @@
 # Sample React + Python Project
 
+For the current CodeJudge model connection, generated problems, and asynchronous
+submission API, see [Models and submission status](docs/llm-and-submissions.md).
+
 A reusable full-stack template with a React/Vite frontend and FastAPI backend.
 The example application is a persistent click counter:
 
@@ -28,6 +31,31 @@ Linux/macOS:
 If a Python virtual environment or Conda environment is already active, setup
 installs into that environment and run uses the same interpreter. Otherwise,
 the scripts create and reuse `.venv` in this project.
+
+The root setup also prepares Kokoro in a separate Python 3.12 environment at
+`python-kokoro/.venv`, with CUDA acceleration by default. Install Python 3.12
+alongside your application Python. The root runner starts Kokoro and waits for
+it to be ready before launching CodeJudge, or reuses a compatible service
+already running on port 8880. Services it starts stop with Ctrl+C; a reused
+Kokoro service keeps running.
+
+For CPU-only machines, use `setup.bat --kokoro-device cpu` and
+`run.bat --kokoro-device cpu` (or the equivalent `.sh` wrappers).
+Set `KOKORO_DEVICE=cpu` in `.env` to remember that choice. To update only the
+speech environment, run `python setup.py --kokoro-only`.
+`--skip-kokoro` leaves speech setup/startup to you.
+
+To open CodeJudge from another device on the same LAN, run:
+
+```powershell
+.\run_lan.bat
+```
+
+Open the printed `LAN: http://<computer-IP>:<port>` address on that device.
+The wrapper forwards options, for example `run_lan.bat --frontend-port 5190`.
+Its equivalent command is `python run.py serve --lan`, or
+`./run.sh serve --lan` on Linux/macOS. The frontend handles API and narration
+requests through its local backend proxy. Devices share the same stored data.
 
 The default backend and frontend ports are `8000` and `5173`. The runner checks
 both ports before launch and advances to the next available port when needed.

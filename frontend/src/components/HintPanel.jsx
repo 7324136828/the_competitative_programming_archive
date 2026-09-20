@@ -1,6 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Lightbulb, ChevronRight, Loader2, Sparkles, CheckCircle2 } from 'lucide-react';
 import { fetchHint } from '../services/api';
+import LLMModel, { useLLMModel } from './LLMModel';
+import RichContent from './RichContent';
+import ResponseAudio from './ResponseAudio';
 
 export default function HintPanel({ problemId }) {
   const [hints, setHints] = useState([]);
@@ -8,16 +11,32 @@ export default function HintPanel({ problemId }) {
   const [totalSteps, setTotalSteps] = useState(7);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const { model, ready } = useLLMModel();
+  const [usedModel, setUsedModel] = useState(null);
+  const requestVersion = useRef(0);
+  useEffect(() => {
+    requestVersion.current += 1;
+    setHints([]);
+    setCurrentLevel(0);
+    setTotalSteps(7);
+    setLoading(false);
+    setError(null);
+    setUsedModel(null);
+    return () => { requestVersion.current += 1; };
+  }, [problemId, model]);
 
   const handleGetHint = async () => {
     const nextLevel = currentLevel + 1;
-    if (nextLevel > totalSteps) return;
+    if (nextLevel > totalSteps || loading || !ready) return;
 
     setLoading(true);
     setError(null);
+    const request = ++requestVersion.current;
     try {
-      const res = await fetchHint({ problemId, hintLevel: nextLevel });
+      const res = await fetchHint({ problemId, hintLevel: nextLevel, model });
+      if (request !== requestVersion.current) return;
       if (res.success) {
+        setUsedModel(res.model || model);
         if (res.totalSteps) setTotalSteps(res.totalSteps);
         setHints(prev => [
           ...prev,
@@ -31,9 +50,9 @@ export default function HintPanel({ problemId }) {
         setCurrentLevel(res.hintLevel);
       }
     } catch (err) {
-      setError(err.message);
+      if (request === requestVersion.current) setError(err.message);
     } finally {
-      setLoading(false);
+      if (request === requestVersion.current) setLoading(false);
     }
   };
 
@@ -71,7 +90,7 @@ export default function HintPanel({ problemId }) {
         {currentLevel < totalSteps && (
           <button
             onClick={handleGetHint}
-            disabled={loading}
+            disabled={loading || !ready}
             className="btn btn-secondary"
             style={{
               padding: '0.35rem 0.75rem',
@@ -96,6 +115,7 @@ export default function HintPanel({ problemId }) {
         )}
       </div>
 
+      <LLMModel usedModel={usedModel} />
       {error && (
         <div style={{ fontSize: '0.75rem', color: '#ef4743' }}>
           Failed to load thinking step: {error}
@@ -154,14 +174,12 @@ export default function HintPanel({ problemId }) {
                   <span style={{ color: '#aaa', fontSize: '0.72rem' }}>• {h.category}</span>
                 </div>
               </div>
-              <p style={{
+              <RichContent content={h.text} style={{
                 fontSize: '0.8rem',
                 color: '#d1d5db',
                 lineHeight: 1.5,
-                whiteSpace: 'pre-wrap'
-              }}>
-                {h.text}
-              </p>
+              }} />
+              <ResponseAudio text={h.text} label="Read hint aloud" />
             </div>
           ))}
         </div>
@@ -186,4 +204,3 @@ export default function HintPanel({ problemId }) {
     </div>
   );
 }
-
