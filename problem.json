@@ -1,0 +1,165 @@
+[
+  {
+    "title": "Two Sum",
+    "problem_statements": "Given an array of integers `nums` and an integer `target`, return indices of the two numbers such that they add up to `target`.\n\nYou may assume that each input would have exactly one solution, and you may not use the same element twice.\n\nYou can return the answer in any order.\n\n### Input Format\n- First line: space-separated integers representing `nums`.\n- Second line: a single integer `target`.\n\n### Output Format\n- Space-separated 0-based indices of the two numbers.\n\n### Constraints\n- `2 <= nums.length <= 10^4`\n- `-10^9 <= nums[i] <= 10^9`\n- `-10^9 <= target <= 10^9`\n- Only one valid answer exists.",
+    "sample_input_output": [
+      {
+        "input": "2 7 11 15\n9",
+        "output": "0 1"
+      },
+      {
+        "input": "3 2 4\n6",
+        "output": "1 2"
+      },
+      {
+        "input": "3 3\n6",
+        "output": "0 1"
+      }
+    ],
+    "hints": [
+      "A really brute force way would be to search for all possible pairs of numbers but that would be slow. Can we do better?",
+      "The second train of thought is, without changing the array, can we use additional space like a hash map?",
+      "Can we iterate through the array once and check if target - nums[i] already exists in our hash map?"
+    ],
+    "language": "en",
+    "difficulty": "Easy",
+    "tags": ["Array", "Hash Table"],
+    "source": "https://leetcode.com/problems/two-sum"
+  },
+  {
+    "title": "Palindrome Number",
+    "problem_statements": "Given an integer `x`, return `true` if `x` is a palindrome, and `false` otherwise.\n\nAn integer is a palindrome when it reads the same forward and backward.\n\n### Input Format\n- A single integer `x`.\n\n### Output Format\n- `true` or `false`.\n\n### Constraints\n- `-2^31 <= x <= 2^31 - 1`",
+    "sample_input_output": [
+      {
+        "input": "121",
+        "output": "true"
+      },
+      {
+        "input": "-121",
+        "output": "false"
+      },
+      {
+        "input": "10",
+        "output": "false"
+      }
+    ],
+    "hints": [
+      "Negative numbers cannot be palindromes because of the minus sign.",
+      "Could negative numbers ever be palindromes? No, because '-' does not match any digit from right to left.",
+      "Can you reverse the integer or half of the integer mathematically without converting it to a string?"
+    ],
+    "language": "en",
+    "difficulty": "Easy",
+    "tags": ["Math"],
+    "source": "https://leetcode.com/problems/palindrome-number"
+  },
+  {
+    "title": "Longest Substring Without Repeating Characters",
+    "problem_statements": "Given a string `s`, find the length of the longest substring without duplicate characters.\n\n### Input Format\n- A single line containing the string `s`.\n\n### Output Format\n- An integer representing the maximum length.\n\n### Constraints\n- `0 <= s.length <= 5 * 10^4`\n- `s` consists of English letters, digits, symbols and spaces.",
+    "sample_input_output": [
+      {
+        "input": "abcabcbb",
+        "output": "3"
+      },
+      {
+        "input": "bbbbb",
+        "output": "1"
+      },
+      {
+        "input": "pwwkew",
+        "output": "3"
+      }
+    ],
+    "hints": [
+      "Use a sliding window approach with two pointers (left and right).",
+      "Store the most recent index of each character in a hash map.",
+      "When a duplicate character is encountered within the current window, move the left pointer past the previous occurrence."
+    ],
+    "language": "en",
+    "difficulty": "Medium",
+    "tags": ["Hash Table", "String", "Sliding Window"],
+    "source": "https://leetcode.com/problems/longest-substring-without-repeating-characters"
+  },
+  {
+    "title": "Valid Parentheses",
+    "problem_statements": "Given a string `s` containing just the characters `'('`, `')'`, `'{'`, `'}'`, `'['` and `']'`, determine if the input string is valid.\n\nAn input string is valid if:\n1. Open brackets must be closed by the same type of brackets.\n2. Open brackets must be closed in the correct order.\n3. Every close bracket has a corresponding open bracket of the same type.\n\n### Input Format\n- A single line containing string `s`.\n\n### Output Format\n- `true` or `false`.\n\n### Constraints\n- `1 <= s.length <= 10^4`\n- `s` consists of parentheses only `'()[]{}'`.",
+    "sample_input_output": [
+      {
+        "input": "()",
+        "output": "true"
+      },
+      {
+        "input": "()[]{}",
+        "output": "true"
+      },
+      {
+        "input": "(]",
+        "output": "false"
+      },
+      {
+        "input": "([)]",
+        "output": "false"
+      },
+      {
+        "input": "{[]}",
+        "output": "true"
+      }
+    ],
+    "hints": [
+      "Use a stack data structure to keep track of opening brackets.",
+      "Whenever you encounter a closing bracket, check whether the top of the stack matches the expected opening bracket.",
+      "If the stack is empty at the end, all brackets were properly matched."
+    ],
+    "language": "en",
+    "difficulty": "Easy",
+    "tags": ["String", "Stack"],
+    "source": "https://leetcode.com/problems/valid-parentheses"
+  },
+  {
+    "title": "Binary Search",
+    "problem_statements": "Given an array of integers `nums` which is sorted in ascending order, and an integer `target`, write a function to search `target` in `nums`. If `target` exists, then return its 0-based index. Otherwise, return `-1`.\n\nYou must write an algorithm with `O(log n)` runtime complexity.\n\n### Input Format\n- First line: space-separated sorted integers `nums`.\n- Second line: integer `target`.\n\n### Output Format\n- A single integer representing the index or `-1`.\n\n### Constraints\n- `1 <= nums.length <= 10^4`\n- `-10^4 < nums[i], target < 10^4`\n- All integers in `nums` are unique.\n- `nums` is sorted in ascending order.",
+    "sample_input_output": [
+      {
+        "input": "-1 0 3 5 9 12\n9",
+        "output": "4"
+      },
+      {
+        "input": "-1 0 3 5 9 12\n2",
+        "output": "-1"
+      }
+    ],
+    "hints": [
+      "Initialize left = 0 and right = nums.length - 1.",
+      "Calculate mid = left + (right - left) // 2 in each iteration to avoid integer overflow.",
+      "If nums[mid] == target, return mid; if nums[mid] < target, search right half; else search left half."
+    ],
+    "language": "en",
+    "difficulty": "Easy",
+    "tags": ["Array", "Binary Search"],
+    "source": "https://leetcode.com/problems/binary-search"
+  },
+  {
+    "title": "Merge Intervals",
+    "problem_statements": "Given an array of `intervals` where `intervals[i] = [start_i, end_i]`, merge all overlapping intervals, and return an array of the non-overlapping intervals that cover all the intervals in the input.\n\n### Input Format\n- First line: integer `n`, number of intervals.\n- Next `n` lines: two space-separated integers `start end`.\n\n### Output Format\n- Print each merged interval on a new line with space-separated start and end values.\n\n### Constraints\n- `1 <= intervals.length <= 10^4`\n- `0 <= start_i <= end_i <= 10^4`",
+    "sample_input_output": [
+      {
+        "input": "4\n1 3\n2 6\n8 10\n15 18",
+        "output": "1 6\n8 10\n15 18"
+      },
+      {
+        "input": "2\n1 4\n4 5",
+        "output": "1 5"
+      }
+    ],
+    "hints": [
+      "Sort the intervals by their start times first.",
+      "Iterate through sorted intervals and maintain the current merged interval.",
+      "If the next interval's start <= current interval's end, merge them by updating end = max(current.end, next.end)."
+    ],
+    "language": "en",
+    "difficulty": "Medium",
+    "tags": ["Array", "Sorting"],
+    "source": "https://leetcode.com/problems/merge-intervals"
+  }
+]
+

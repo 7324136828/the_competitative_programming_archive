@@ -1,0 +1,54 @@
+.code-editor {
+  position: relative;
+  min-height: 0;
+}
+
+.code-editor .editor-toolbar,
+.code-editor .editor-toolbar > div {
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.source-import-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding: 0.3rem 1rem;
+  border-bottom: 1px solid #333;
+  color: #aaa;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.source-import-status .btn {
+  flex-shrink: 0;
+  padding: 0.1rem 0.3rem;
+  font-size: 0.75rem;
+}
+
+.source-import-error {
+  color: #ff8d89;
+}
+
+.source-drop-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1rem;
+  border: 2px dashed #ffa116;
+  background: rgb(30 30 30 / 94%);
+  color: #eff2f6;
+  text-align: center;
+  pointer-events: none;
+}
+
+.source-drop-overlay span {
+  color: #bbb;
+  font-size: 0.8rem;
+}

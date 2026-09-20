@@ -1,0 +1,76 @@
+.solve-workspace, .workspace-coding {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.solve-workspace { flex: 1; }
+.solve-workspace.is-stacked { grid-template-columns: minmax(0, 1fr); }
+.workspace-coding { grid-template-columns: minmax(0, 1fr); }
+
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #202020;
+}
+
+.workspace-panel[hidden], .workspace-coding[hidden] { display: none; }
+
+.workspace-panel.is-expanded {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  width: 100%;
+  height: 100dvh;
+}
+
+.workspace-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 32px;
+  gap: 0.5rem;
+  padding: 0 0.65rem;
+  background: #252525;
+  border-bottom: 1px solid #393939;
+  color: #b9bec7;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.workspace-expand {
+  padding: 0.2rem 0.35rem;
+  color: #b9bec7;
+  font-size: 0.72rem;
+}
+
+.workspace-expand:focus-visible { outline: 2px solid #ffa116; }
+.workspace-panel-content { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+
+.workspace-resizer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #151515;
+  border: 1px solid #343434;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+}
+
+.workspace-resizer-vertical { cursor: col-resize; }
+.workspace-resizer-horizontal { cursor: row-resize; }
+.workspace-resizer span { display: block; border-radius: 3px; background: #666; pointer-events: none; }
+.workspace-resizer-vertical span { width: 3px; height: 36px; }
+.workspace-resizer-horizontal span { width: 36px; height: 3px; }
+.workspace-resizer:hover, .workspace-resizer:focus-visible, .workspace-resizer.is-dragging { background: #47351c; border-color: #ffa116; }
+.workspace-resizer:hover span, .workspace-resizer:focus-visible span, .workspace-resizer.is-dragging span { background: #ffa116; }
+
+/* Toolbars can wrap when a pane is narrowed or the layout is stacked. */
+.workspace-panel .editor-toolbar, .workspace-panel .test-console-toolbar { flex-wrap: wrap; gap: 0.4rem; flex-shrink: 0; }
+.workspace-panel .editor-toolbar > div, .workspace-panel .test-console-toolbar > div { flex-wrap: wrap; }
