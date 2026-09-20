@@ -31,7 +31,12 @@ that produced them, and switching models starts the progressive hints over.
 To access the workspace from another device on the same network, launch
 `run_lan.bat` and open one of the printed LAN URLs on that device. This wrapper
 runs `run.bat serve --lan` and forwards extra arguments, including
-`--frontend-port` and `--kokoro-device`. You can also use
+`--frontend-port`, `--backend-port`, `--kokoro-backend-port`, and `--kokoro-device`.
+For example, `run_lan.bat --frontend-port 8080 --backend-port 8000 --kokoro-backend-port 8890`
+serves the UI on port 8080, sends its API requests to the backend on port 8000,
+and connects the backend to Kokoro on port 8890. Busy frontend/backend ports
+advance to the next free port; Kokoro uses its exact configured port. The
+launcher prints the actual URLs. You can also use
 `python run.py serve --lan` directly. The frontend listens on the network and
 proxies API and audio requests to the backend. All connected devices use this
 installation's shared problems, drafts, and submission history.
@@ -183,6 +188,15 @@ It installs and checks the requested PyTorch device, backend, frontend, and
 browser-test dependencies. `run.py` waits for Kokoro's health check before
 starting the backend and frontend. It reuses a compatible service already
 running at `KOKORO_BASE_URL`; it stops only services it started when you exit.
+
+Choose the speech port with `run.bat --kokoro-backend-port 8890` (also supported
+by `run_lan.bat`, `python run.py`, and `./run.sh`). The flag accepts ports
+1–65535 and overrides only the port in `KOKORO_BASE_URL`, preserving its scheme,
+host, and path. The updated URL is passed to the application backend without
+changing `.env`. To persist it, set `KOKORO_BASE_URL=http://127.0.0.1:8890` in
+`.env`. A compatible service on that port is reused; an incompatible occupied
+port causes an error. With `--skip-kokoro`, the URL override still applies,
+but you start the speech service yourself.
 
 Use `python setup.py --kokoro-only` to prepare just the speech environment.
 Both root scripts support `--kokoro-device cpu` and `--skip-kokoro`.

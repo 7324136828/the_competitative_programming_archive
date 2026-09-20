@@ -69,7 +69,8 @@ def available_port(start: int, reserved: set[int] | None = None, *, host: str = 
     for port in range(start, 65536):
         if port in reserved:
             continue
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        family = socket.AF_INET6 if ":" in host else socket.AF_INET
+        with socket.socket(family, socket.SOCK_STREAM) as probe:
             try:
                 probe.bind((host, port))
             except OSError:
@@ -149,6 +150,14 @@ def kokoro_url(base_url: str):
     return parsed, port, health_url
 
 
+def kokoro_base_url(base_url: str, port: int) -> str:
+    """Override a speech service port while preserving its host and API prefix."""
+    port = parse_port(port, "Kokoro backend port")
+    parsed, _, _ = kokoro_url(base_url)
+    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+    return urlunsplit((parsed.scheme, f"{host}:{port}", parsed.path, "", ""))
+
+
 def read_kokoro_health(health_url: str) -> dict | None:
     try:
         with build_opener(ProxyHandler({})).open(health_url, timeout=1) as response:
@@ -221,11 +230,17 @@ def start_kokoro(base_url: str, device: str, *, timeout: float = 60) -> subproce
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=__doc__,
+        epilog="Example: run.py serve --lan --frontend-port 8080 --backend-port 8000 "
+               "--kokoro-backend-port 8890. Busy frontend/backend ports advance to the next free port; "
+               "Kokoro uses the exact requested port and reuses a compatible service there.",
+    )
     parser.add_argument("command", nargs="?", choices=("serve",), default="serve", help="start the application (default)")
     parser.add_argument("--lan", action="store_true", help="share the app on your LAN through the frontend port")
-    parser.add_argument("--backend-port", type=int, help="first backend port to try (default 3001)")
-    parser.add_argument("--frontend-port", type=int, help="first frontend port to try (default 5173)")
+    parser.add_argument("--backend-port", type=int, metavar="PORT", help="first backend port to try (1-65535; overrides PORT/BACKEND_PORT; default 3001)")
+    parser.add_argument("--frontend-port", type=int, metavar="PORT", help="first frontend port to try (1-65535; overrides FRONTEND_PORT; default 5173)")
+    parser.add_argument("--kokoro-backend-port", type=int, metavar="PORT", help="Kokoro port (1-65535; overrides the port in KOKORO_BASE_URL; default 8880)")
     parser.add_argument("--host", default=os.environ.get("HOST") or os.environ.get("BACKEND_HOST", "127.0.0.1"), help="backend bind address")
     parser.add_argument("--kokoro-device", choices=("cuda", "cpu", "auto"), help="speech device (default KOKORO_DEVICE or cuda)")
     parser.add_argument("--skip-kokoro", action="store_true", help="do not start or validate the speech service")
@@ -235,6 +250,20 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     load_env_file()
     args = parse_args()
+    requested_backend = parse_port(
+        args.backend_port if args.backend_port is not None else os.environ.get("PORT") or os.environ.get("BACKEND_PORT", "3001"),
+        "backend port",
+    )
+    requested_frontend = parse_port(
+        args.frontend_port if args.frontend_port is not None else os.environ.get("FRONTEND_PORT", "5173"),
+        "frontend port",
+    )
+    kokoro_base = os.environ.get("KOKORO_BASE_URL") or "http://127.0.0.1:8880"
+    if args.kokoro_backend_port is not None:
+        kokoro_base = kokoro_base_url(kokoro_base, args.kokoro_backend_port)
+        # Pass the override through runtime bootstrap/re-execution and to the
+        # application, including when speech is managed with --skip-kokoro.
+        os.environ["KOKORO_BASE_URL"] = kokoro_base
     device = None
     if not args.skip_kokoro:
         try:
@@ -246,30 +275,22 @@ def main() -> int:
     if Path(sys.executable).resolve() != runtime.resolve():
         return subprocess.call([str(runtime), str(Path(__file__).resolve()), *sys.argv[1:]])
 
-    requested_backend = parse_port(
-        args.backend_port or os.environ.get("PORT") or os.environ.get("BACKEND_PORT", "3001"),
-        "backend port",
-    )
-    requested_frontend = parse_port(
-        args.frontend_port or os.environ.get("FRONTEND_PORT", "5173"),
-        "frontend port",
-    )
-    kokoro_base = os.environ.get("KOKORO_BASE_URL") or "http://127.0.0.1:8880"
     reserved = set()
-    if not args.skip_kokoro:
+    if not args.skip_kokoro or args.kokoro_backend_port is not None:
         parsed, kokoro_port, _ = kokoro_url(kokoro_base)
-        if parsed.hostname in ("127.0.0.1", "localhost"):
+        if parsed.hostname in ("127.0.0.1", "localhost", "::1"):
             reserved.add(kokoro_port)
-    backend_port = available_port(requested_backend, reserved)
+    host = args.host
+    backend_port = available_port(requested_backend, reserved, host=host)
     frontend_bind = "0.0.0.0" if args.lan else "127.0.0.1"
     frontend_port = available_port(requested_frontend, reserved | {backend_port}, host=frontend_bind)
-    host = args.host
     backend_url = backend_connect_url(host, backend_port)
     frontend_url = f"http://localhost:{frontend_port}"
 
     backend_env = os.environ.copy()
     backend_env["PORT"] = str(backend_port)
     backend_env["HOST"] = host
+    backend_env["KOKORO_BASE_URL"] = kokoro_base
 
     frontend_env = os.environ.copy()
     frontend_env["VITE_BACKEND_URL"] = backend_url

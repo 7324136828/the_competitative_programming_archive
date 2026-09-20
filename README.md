@@ -67,8 +67,8 @@ The root setup also prepares Kokoro in a separate Python 3.12 environment at
 `python-kokoro/.venv`, with CUDA acceleration by default. Install Python 3.12
 alongside your application Python. The root runner starts Kokoro and waits for
 it to be ready before launching CodeJudge, or reuses a compatible service
-already running on port 8880. Services it starts stop with Ctrl+C; a reused
-Kokoro service keeps running.
+already running at the configured address (port 8880 by default). Services it
+starts stop with Ctrl+C; a reused Kokoro service keeps running.
 
 For CPU-only machines, use `setup.bat --kokoro-device cpu` and
 `run.bat --kokoro-device cpu` (or the equivalent `.sh` wrappers).
@@ -88,9 +88,36 @@ Its equivalent command is `python run.py serve --lan`, or
 `./run.sh serve --lan` on Linux/macOS. The frontend handles API and narration
 requests through its local backend proxy. Devices share the same stored data.
 
+Choose frontend, backend, and Kokoro ports independently:
+
+```powershell
+# Local access
+.\run.bat --frontend-port 8080 --backend-port 8000 --kokoro-backend-port 8890
+
+# LAN access
+.\run_lan.bat --frontend-port 8080 --backend-port 8000 --kokoro-backend-port 8890
+```
+
+The same flags work with `python run.py` and `./run.sh`. Open the printed
+frontend address; the API proxy automatically uses the chosen backend port.
+Command-line ports override environment variables and `.env` settings. To
+remember your choices, set `FRONTEND_PORT=8080` and `BACKEND_PORT=8000` in `.env`.
+The legacy `PORT` environment variable takes precedence over `BACKEND_PORT`
+when no `--backend-port` is supplied.
+
+`--kokoro-backend-port` replaces only the port in `KOKORO_BASE_URL`, preserving
+its host, scheme, and path. The application backend automatically receives the
+updated speech URL; `.env` is unchanged. To remember the Kokoro port, set
+`KOKORO_BASE_URL=http://127.0.0.1:8890` in `.env`. Kokoro uses the exact requested
+port: a compatible service is reused, and an incompatible occupied port reports
+an error. With `--skip-kokoro`, the flag still configures the speech URL but does
+not start the speech service.
+
 The default backend and frontend ports are `3001` and `5173`. The runner checks
 both ports before launch and advances to the next available port when needed.
-It prints the actual URLs selected for the session.
+It prints the actual URLs selected for the session. Valid ports are 1–65535;
+frontend and backend always receive separate ports. Use `.\run.bat --help`
+to list all launcher options.
 
 ## Configuration
 
