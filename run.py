@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the FastAPI backend and Vite frontend together."""
+"""Run the Flask backend and Vite React frontend concurrently."""
 
 from __future__ import annotations
 
@@ -79,20 +79,6 @@ def available_port(start: int, reserved: set[int] | None = None) -> int:
     raise RunError(f"No available TCP port was found at or above {start}")
 
 
-def merge_cors_origins(environment: dict[str, str], frontend_port: int) -> None:
-    current = environment.get("CORS_ORIGINS", "")
-    if current.strip() == "*":
-        return
-    origins = [item.strip() for item in current.split(",") if item.strip()]
-    for origin in (
-        f"http://localhost:{frontend_port}",
-        f"http://127.0.0.1:{frontend_port}",
-    ):
-        if origin not in origins:
-            origins.append(origin)
-    environment["CORS_ORIGINS"] = ",".join(origins)
-
-
 def stop(process: subprocess.Popen[bytes] | None) -> None:
     if process is None or process.poll() is not None:
         return
@@ -106,10 +92,9 @@ def stop(process: subprocess.Popen[bytes] | None) -> None:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--backend-port", type=int, help="first backend port to try")
-    parser.add_argument("--frontend-port", type=int, help="first frontend port to try")
-    parser.add_argument("--host", help="backend bind address")
-    parser.add_argument("--no-reload", action="store_true", help="disable backend reload")
+    parser.add_argument("--backend-port", type=int, help="first backend port to try (default 3001)")
+    parser.add_argument("--frontend-port", type=int, help="first frontend port to try (default 5173)")
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"), help="backend bind address")
     return parser.parse_args()
 
 
@@ -121,7 +106,7 @@ def main() -> int:
 
     load_env_file()
     requested_backend = parse_port(
-        args.backend_port or os.environ.get("BACKEND_PORT", "8000"),
+        args.backend_port or os.environ.get("PORT") or os.environ.get("BACKEND_PORT", "3001"),
         "backend port",
     )
     requested_frontend = parse_port(
@@ -130,12 +115,14 @@ def main() -> int:
     )
     backend_port = available_port(requested_backend)
     frontend_port = available_port(requested_frontend, {backend_port})
-    host = args.host or os.environ.get("BACKEND_HOST", "127.0.0.1")
-    backend_url = f"http://127.0.0.1:{backend_port}"
+    host = args.host
+    backend_url = f"http://{host}:{backend_port}"
     frontend_url = f"http://localhost:{frontend_port}"
 
     backend_env = os.environ.copy()
-    merge_cors_origins(backend_env, frontend_port)
+    backend_env["PORT"] = str(backend_port)
+    backend_env["HOST"] = host
+
     frontend_env = os.environ.copy()
     frontend_env["VITE_BACKEND_URL"] = backend_url
 
@@ -143,16 +130,16 @@ def main() -> int:
     if npm is None:
         raise RunError("npm was not found; run setup first")
     if not (FRONTEND / "node_modules").is_dir():
-        raise RunError("Frontend dependencies are missing; run setup first")
+        raise RunError("Frontend dependencies are missing; run setup.bat or setup.py first")
 
     if backend_port != requested_backend:
         print(f"[run] Backend port {requested_backend} is busy; using {backend_port}.")
     if frontend_port != requested_frontend:
         print(f"[run] Frontend port {requested_frontend} is busy; using {frontend_port}.")
     print("=" * 62)
-    print("Sample React + Python Project")
+    print("CodeJudge LeetCode Platform")
     print(f"Python:   {sys.executable}")
-    print(f"Backend:  {backend_url} (docs: {backend_url}/docs)")
+    print(f"Backend:  {backend_url} (API: {backend_url}/api/problems)")
     print(f"Frontend: {frontend_url}")
     print("Press Ctrl+C to stop both services.")
     print("=" * 62, flush=True)
@@ -160,15 +147,12 @@ def main() -> int:
     backend_command = [
         sys.executable,
         "-m",
-        "uvicorn",
-        "backend.app.main:app",
+        "backend.app",
         "--host",
         host,
         "--port",
         str(backend_port),
     ]
-    if not args.no_reload:
-        backend_command.append("--reload")
     frontend_command = [
         npm,
         "run",

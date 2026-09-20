@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set up the Python backend, React frontend, and end-to-end tests."""
+"""Set up the Python backend, React frontend, and dependencies."""
 
 from __future__ import annotations
 
@@ -86,6 +86,14 @@ def main() -> int:
     run([npm, "install"], cwd=FRONTEND)
     print("[setup] Installing end-to-end test dependencies")
     run([npm, "install"], cwd=E2E)
+
+    if (E2E / "package.json").is_file():
+        print("[setup] Installing end-to-end test dependencies")
+        try:
+            run([npm, "install"], cwd=E2E)
+        except Exception as e:
+            print(f"[setup] Warning: E2E dependency install skipped: {e}")
+
     seed_environment_file()
 
     print("\n[setup] Ready. Start the application with run.bat or ./run.sh")
