@@ -1,0 +1,10 @@
+I want you to build a Leetcode like application.
+
+Based on the skills, can you create based on the original-project so that it will have everything in the root?
+
+Make sure you follow the guidance of productionization.
+
+Also make sure we can have a UI in reactjs such that the user can use chat functionality.
+
+Create a backend with the python code based on original-project. Make sure you have setup.bat/setup.sh file that will dispatch setup.py such that it will setup virtual environment and run.bat/run.sh such that it will dispatch the frontend and backend? 
+
