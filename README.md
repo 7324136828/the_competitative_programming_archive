@@ -1,16 +1,47 @@
-# Sample React + Python Project
+# CodeJudge
 
-For the current CodeJudge model connection, generated problems, and asynchronous
-submission API, see [Models and submission status](docs/llm-and-submissions.md).
+CodeJudge is a local competitive programming workspace built with React, Vite,
+Flask, and SQLite. Browse problems, write or upload solutions, run test cases,
+and track submissions. AI tools provide hints, explanations, and generated
+problems, with Markdown and LaTeX rendering and saved Kokoro narration.
 
-A reusable full-stack template with a React/Vite frontend and FastAPI backend.
-The example application is a persistent click counter:
+Editor drafts save to disk, submission history can be exported as a ZIP, and
+the workspace can be shared with devices on your LAN. See
+[Models, submissions, and workspace features](docs/llm-and-submissions.md) for
+the detailed configuration and API behavior.
 
-- **Click** sends a request to Python, which increments the count atomically.
-- The count is stored in SQLite, so closing the browser or stopping the server
-  does not erase it.
-- **Clear count** resets the stored value to zero.
-- The frontend reloads the current value whenever it starts.
+## Screenshots
+
+Screenshots use demonstration data.
+
+To refresh these images from the application, run `npm run screenshots` in
+`e2e/`. The capture uses an isolated demonstration database and local AI fixtures.
+
+### Problem archive
+
+Search and filter the problem collection, with solved problems marked in green.
+
+![CodeJudge problem archive with search, filters, and solved status](docs/screenshots/problem-archive.png)
+
+### Solving workspace
+
+Read the statement beside the code editor and test console. Resize or expand
+panels, upload source files, and save drafts automatically.
+
+![CodeJudge solving workspace showing a problem, source code, and test results](docs/screenshots/solving-workspace.png)
+
+### AI assistant
+
+Discuss the current problem with formatted explanations, mathematical formulas,
+and code examples. Read-aloud controls generate saved Kokoro audio.
+
+![CodeJudge AI assistant displaying a formatted response with math and read-aloud controls](docs/screenshots/ai-assistant.png)
+
+### Submission history
+
+Review verdicts, submitted code, and test results, or export all submissions.
+
+![CodeJudge submission history with verdicts, saved source, and ZIP export](docs/screenshots/submission-history.png)
 
 ## Quick start
 
@@ -57,7 +88,7 @@ Its equivalent command is `python run.py serve --lan`, or
 `./run.sh serve --lan` on Linux/macOS. The frontend handles API and narration
 requests through its local backend proxy. Devices share the same stored data.
 
-The default backend and frontend ports are `8000` and `5173`. The runner checks
+The default backend and frontend ports are `3001` and `5173`. The runner checks
 both ports before launch and advances to the next available port when needed.
 It prints the actual URLs selected for the session.
 
@@ -69,35 +100,49 @@ precedence over values in `.env`.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `BACKEND_PORT` | `8000` | First backend port to try |
+| `BACKEND_PORT` | `3001` | First backend port to try |
 | `FRONTEND_PORT` | `5173` | First frontend port to try |
 | `BACKEND_HOST` | `127.0.0.1` | Backend bind address |
-| `COUNTER_DB_PATH` | `data/counter.db` | Persistent SQLite database |
+| `DATABASE_PATH` | System temporary directory under `codejudge/<project-id>/leetcode.db` | SQLite database; set an explicit path for long-term storage |
+| `WORKSPACE_STORAGE_DIR` | `data/workspace/<database-id>` | Saved editor drafts and narration files |
+| `CONNECTOR_BASE_URL` | `http://127.0.0.1:8301/v1` | The Connector API for AI model discovery and requests |
+| `LLM_MODEL` | First discovered model | Active Connector configuration ID |
+| `KOKORO_BASE_URL` | `http://127.0.0.1:8880` | Standalone speech service |
+| `KOKORO_DEVICE` | `cuda` | Speech acceleration device (`cuda` or `cpu`) |
 
 ## API
 
 | Method | Path | Behavior |
 | --- | --- | --- |
 | `GET` | `/api/health` | Backend health check |
-| `GET` | `/api/counter` | Read the saved count |
-| `POST` | `/api/counter/click` | Increment and return the count |
-| `DELETE` | `/api/counter` | Reset and return the count |
+| `GET` | `/api/problems` | Browse and search saved problems |
+| `POST` | `/api/problems/upload` | Import a problem collection |
+| `GET` | `/api/llm/models` | Discover available AI models |
+| `POST` | `/api/run` | Execute code with custom input |
+| `POST` | `/api/submit` | Judge and save a solution; supports asynchronous jobs |
+| `GET` | `/api/submission-jobs/<job-id>` | Poll submission progress and results |
+| `GET` | `/api/submissions` | Browse submission history |
+| `GET` | `/api/submissions/export.zip` | Download all submissions |
+| `POST` | `/api/chat` | Ask the AI assistant |
+| `DELETE` | `/api/audio/cache` | Clear saved narration files |
 
-Interactive API documentation is available at the backend `/docs` URL.
+See [Models and submission status](docs/llm-and-submissions.md) for request
+formats, draft persistence, and audio endpoints.
 
 ## Tests and build
 
 ```powershell
 python -m unittest discover -s backend\tests -v
+python -m unittest discover -s tests -v
 cd frontend
-npm run typecheck
+npm test
 npm run build
 cd ..\e2e
 npm run typecheck
 npm test
 ```
 
-The Playwright suite starts both FastAPI and Vite automatically, then exercises
+The Playwright suite starts both Flask and Vite automatically, then exercises
 the live API through the frontend proxy using an isolated test database. It
 uses Microsoft Edge by default. On macOS it uses Playwright's WebKit-based
 Desktop Safari profile, which is the supported automation equivalent for
@@ -114,10 +159,14 @@ npm run install:webkit
 ## Project layout
 
 ```text
-backend/                  FastAPI application, SQLite store, and unit tests
-frontend/                 TypeScript React/Vite application
+backend/                  Flask application, SQLite store, and unit tests
+frontend/                 React/Vite application and frontend unit tests
 e2e/                      Standalone TypeScript Playwright end-to-end tests
-data/                     Runtime database location (database is ignored)
+python-kokoro/            Standalone Python 3.12 speech service
+data/workspace/           Saved editor drafts and cached narration (ignored)
+docs/                     Feature documentation and application screenshots
+tests/                    Root setup and launcher tests
 setup.py / setup.*        Cross-platform dependency setup
-run.py / run.*            Combined backend/frontend runner
+run.py / run.*            Combined backend/frontend/Kokoro runner
+run_lan.bat               Windows launcher for LAN access
 ```
