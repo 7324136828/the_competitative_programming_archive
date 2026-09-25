@@ -113,3 +113,25 @@ When submitting C++ code, it sometimes return empty results:
 Can we implement async status wait from the backend to compile the code and then return?
 
 
+## 2 
+
+Can you integrate the code with the merging project skill provided 
+to merge the functionality of jira into the competitative programming archive 
+by making every problem into a story?
+
+And the concept of problem sets, we can attribute to features.
+
+And set of problem sets, we can call epics, which can be created by the user. 
+
+In order to perserve the functionality of submission and testing code and read aloud and hints,
+
+when we open a story and it's associated with a coding problem, 
+then we should open up an activity screen which allow the submission and testing etc.
+
+Note: this activity screen might accommedate functionality more than coding. Please take a note of this to make it extensible. 
+
+Change of status for story related to coding will depend on completely by submission status and also the testing results. 
+
+User should be allowed to import stories like what we have done before for coding problem. 
+
+We can also create coding/non-coding story by using ai as well. 
