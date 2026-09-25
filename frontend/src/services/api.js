@@ -40,10 +40,21 @@ export async function fetchProblems(params = {}) {
   if (params.search) query.set('search', params.search);
   if (params.language && params.language !== 'all') query.set('language', params.language);
   if (params.difficulty && params.difficulty !== 'all') query.set('difficulty', params.difficulty);
+  if (params.solved && params.solved !== 'all') query.set('solved', params.solved);
 
   const res = await fetch(`${API_BASE}/problems?${query.toString()}`);
   if (!res.ok) throw new Error('Failed to fetch problems');
   return res.json();
+}
+
+export async function generateProblemTags({ problemIds, model }, { signal } = {}) {
+  const res = await fetch(`${API_BASE}/llm/generate-tags`, {
+    method: 'POST',
+    signal,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ problemIds, model })
+  });
+  return readResponse(res, 'Failed to generate problem tags');
 }
 
 export async function fetchProblem(id) {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
-import { fetchModels, fetchHint, generateSimilarProblem, generateTestCases, submitCode } from './api.js';
+import { fetchModels, fetchHint, fetchProblems, generateProblemTags, generateSimilarProblem, generateTestCases, submitCode } from './api.js';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -23,6 +23,19 @@ test('AI task requests pass the discovered model and expose server error details
     await assert.rejects(action({ problemId: 4, model: 'my-config' }), /Configure an alias first/);
   }
   assert.deepEqual(requested.map(([, body]) => body.model), ['my-config', 'my-config', 'my-config']);
+});
+
+test('problem filters and tag batches use the expected API payloads', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push([url, options]);
+    return response({ success: true, problems: [], tags: [] });
+  };
+  await fetchProblems({ page: 3, limit: 25, solved: 'unsolved' });
+  await generateProblemTags({ problemIds: [2, 4, 6], model: 'my-config' });
+  assert.equal(calls[0][0], '/api/problems?page=3&limit=25&solved=unsolved');
+  assert.equal(calls[1][0], '/api/llm/generate-tags');
+  assert.deepEqual(JSON.parse(calls[1][1].body), { problemIds: [2, 4, 6], model: 'my-config' });
 });
 
 test('submission waits through compile and run phases, returns final stdout, and posts only once', async () => {

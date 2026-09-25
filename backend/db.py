@@ -56,6 +56,10 @@ CREATE TABLE IF NOT EXISTS editor_drafts (
     PRIMARY KEY (problem_id, language),
     FOREIGN KEY(problem_id) REFERENCES problems(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    name TEXT PRIMARY KEY,
+    applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 CREATE INDEX IF NOT EXISTS idx_problems_language ON problems(language);
 CREATE INDEX IF NOT EXISTS idx_problems_difficulty ON problems(difficulty);
 CREATE INDEX IF NOT EXISTS idx_submissions_problem_id ON submissions(problem_id);
@@ -108,11 +112,13 @@ def verified_acceptance(submission: dict) -> bool:
     )
 
 
-PROBLEM_SELECT = """SELECT problems.*, EXISTS (
+SOLVED_EXISTS = """EXISTS (
     SELECT 1 FROM submissions
     WHERE submissions.problem_id = problems.id
       AND submissions.status = 'Accepted' AND submissions.verified = 1
-) AS is_solved FROM problems"""
+)"""
+
+PROBLEM_SELECT = f"SELECT problems.*, {SOLVED_EXISTS} AS is_solved FROM problems"
 
 
 class Database:
@@ -138,6 +144,21 @@ class Database:
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'problems'"
             ).fetchone()
             connection.executescript(SCHEMA)
+            legacy_tag_migration = "remove_legacy_algorithm_tag_default_v1"
+            if connection.execute(
+                "SELECT 1 FROM schema_migrations WHERE name = ?", (legacy_tag_migration,)
+            ).fetchone() is None:
+                # Older imports assigned this generic placeholder whenever no
+                # tag was supplied. It is not a user- or AI-selected tag, and
+                # otherwise prevents the visible-page tag generator from ever
+                # asking The Connector to classify those problems.
+                connection.execute(
+                    "UPDATE problems SET tags = '[]' WHERE tags = ?",
+                    (json.dumps(["Algorithm"]),),
+                )
+                connection.execute(
+                    "INSERT INTO schema_migrations (name) VALUES (?)", (legacy_tag_migration,)
+                )
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(problems)")}
             if "source" not in columns:
                 connection.execute("ALTER TABLE problems ADD COLUMN source TEXT")
@@ -171,6 +192,7 @@ class Database:
         search: str = "",
         language: str = "",
         difficulty: str = "",
+        solved: str = "",
     ) -> dict:
         page = bounded_int(page, 1)
         limit = bounded_int(limit, 20, maximum=100)
@@ -188,6 +210,13 @@ class Database:
         if difficulty.strip():
             clauses.append("difficulty = ?")
             parameters.append(difficulty.strip().capitalize())
+        solved_filter = solved.strip().lower()
+        if solved_filter not in ("", "all", "solved", "unsolved"):
+            raise ValueError("solved must be 'solved', 'unsolved', or 'all'.")
+        if solved_filter == "solved":
+            clauses.append(SOLVED_EXISTS)
+        elif solved_filter == "unsolved":
+            clauses.append(f"NOT {SOLVED_EXISTS}")
 
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.connect() as connection:
@@ -238,6 +267,27 @@ class Database:
             created_id = cursor.lastrowid
             row = connection.execute("SELECT * FROM problems WHERE id = ?", (created_id,)).fetchone()
             return format_problem(row)  # type: ignore[return-value]
+
+    def set_problem_tags_if_empty(self, problem_id: int, tags: list[str]) -> dict | None:
+        """Persist tags once, without replacing tags saved by another request."""
+        if not tags or any(not isinstance(tag, str) or not tag.strip() for tag in tags):
+            raise ValueError("tags must contain at least one non-empty string.")
+        normalized = [tag.strip() for tag in tags]
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM problems WHERE id = ?", (problem_id,)).fetchone()
+            if row is None:
+                return None
+            current = format_problem(row)
+            if current and current["tags"]:
+                return current
+            # Compare against the raw value read above so a concurrent writer wins
+            # instead of having its generated tag overwritten.
+            connection.execute(
+                "UPDATE problems SET tags = ? WHERE id = ? AND tags IS ?",
+                (json.dumps(normalized), problem_id, row["tags"]),
+            )
+            updated = connection.execute(f"{PROBLEM_SELECT} WHERE problems.id = ?", (problem_id,)).fetchone()
+            return format_problem(updated)
 
     def bulk_insert(self, problems: list[dict]) -> int:
         if not problems:

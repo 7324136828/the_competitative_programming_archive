@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
-import { Search, ChevronLeft, ChevronRight, Filter, Globe, BookOpen, CheckCircle2 } from 'lucide-react';
-import { fetchProblems } from '../services/api';
+import React, { useState, useEffect, useRef } from 'react';
+import { Search, ChevronLeft, ChevronRight, Filter, Globe, CheckCircle2 } from 'lucide-react';
+import { fetchProblems, generateProblemTags } from '../services/api';
+import { useLLMModel } from './LLMModel';
 
 export default function ProblemList({ onSelectProblem }) {
   const [problems, setProblems] = useState([]);
@@ -10,17 +11,23 @@ export default function ProblemList({ onSelectProblem }) {
   const [search, setSearch] = useState('');
   const [language, setLanguage] = useState('all');
   const [difficulty, setDifficulty] = useState('all');
+  const [includeSolved, setIncludeSolved] = useState(true);
   const [loading, setLoading] = useState(false);
+  const [pageInput, setPageInput] = useState('1');
+  const [taggingIds, setTaggingIds] = useState(() => new Set());
+  const requestedTagIds = useRef(new Set());
+  const { model, ready: modelReady } = useLLMModel();
 
-  const loadProblems = async () => {
+  const loadProblems = async (requestedPage = page) => {
     setLoading(true);
     try {
       const res = await fetchProblems({
-        page,
+        page: requestedPage,
         limit: 25,
         search,
         language,
-        difficulty
+        difficulty,
+        solved: includeSolved ? 'all' : 'unsolved'
       });
       if (res.success) {
         setProblems(res.problems);
@@ -36,12 +43,77 @@ export default function ProblemList({ onSelectProblem }) {
 
   useEffect(() => {
     loadProblems();
-  }, [page, language, difficulty]);
+  }, [page, language, difficulty, includeSolved]);
+
+  useEffect(() => {
+    setPageInput(String(page));
+  }, [page]);
+
+  useEffect(() => {
+    if (loading || !modelReady) return undefined;
+    const untaggedIds = problems
+      .filter(problem => (!problem.tags || problem.tags.length === 0) && !requestedTagIds.current.has(problem.id))
+      .map(problem => problem.id);
+    if (untaggedIds.length === 0) return undefined;
+
+    const controller = new AbortController();
+    let active = true;
+    const generateVisibleTags = async () => {
+      for (let start = 0; start < untaggedIds.length && active; start += 6) {
+        const problemIds = untaggedIds.slice(start, start + 6);
+        problemIds.forEach(id => requestedTagIds.current.add(id));
+        setTaggingIds(current => new Set([...current, ...problemIds]));
+        try {
+          const result = await generateProblemTags({ problemIds, model }, { signal: controller.signal });
+          if (active) {
+            const generated = new Map(result.tags.map(item => [item.problemId, item.tags]));
+            setProblems(current => current.map(problem => (
+              generated.has(problem.id) ? { ...problem, tags: generated.get(problem.id) } : problem
+            )));
+          }
+        } catch (error) {
+          problemIds.forEach(id => requestedTagIds.current.delete(id));
+          if (error.name !== 'AbortError') console.error('Failed to generate problem tags:', error);
+        } finally {
+          if (active) {
+            setTaggingIds(current => {
+              const next = new Set(current);
+              problemIds.forEach(id => next.delete(id));
+              return next;
+            });
+          }
+        }
+      }
+    };
+    generateVisibleTags();
+    return () => {
+      active = false;
+      controller.abort();
+      setTaggingIds(current => {
+        const next = new Set(current);
+        untaggedIds.forEach(id => next.delete(id));
+        return next;
+      });
+    };
+  }, [problems, loading, model, modelReady]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
-    setPage(1);
-    loadProblems();
+    if (page === 1) loadProblems(1);
+    else setPage(1);
+  };
+
+  const handlePageJump = (event) => {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const value = pageInput.trim();
+    const requestedPage = /^\d+$/.test(value) ? Number(value) : 0;
+    if (requestedPage >= 1 && requestedPage <= totalPages) {
+      setPage(requestedPage);
+      setPageInput(String(requestedPage));
+    } else {
+      setPageInput('0');
+    }
   };
 
   return (
@@ -142,6 +214,16 @@ export default function ProblemList({ onSelectProblem }) {
               <option value="Hard">Hard</option>
             </select>
           </div>
+
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', color: '#bbb', fontSize: '0.8rem', cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={!includeSolved}
+              onChange={(event) => { setIncludeSolved(!event.target.checked); setPage(1); }}
+              style={{ accentColor: '#ffa116' }}
+            />
+            Hide solved
+          </label>
         </div>
       </div>
 
@@ -158,6 +240,7 @@ export default function ProblemList({ onSelectProblem }) {
               <th style={{ padding: '0.75rem 1rem', width: '70px' }}>#</th>
               <th style={{ padding: '0.75rem 1rem' }}>Title</th>
               <th style={{ padding: '0.75rem 1rem', width: '120px' }}>Difficulty</th>
+              <th style={{ padding: '0.75rem 1rem', width: '160px' }}>Tag</th>
               <th style={{ padding: '0.75rem 1rem', width: '100px' }}>Language</th>
               <th style={{ padding: '0.75rem 1rem', width: '120px' }}>Testcases</th>
               <th style={{ padding: '0.75rem 1rem', width: '100px', textAlign: 'right' }}>Action</th>
@@ -166,14 +249,14 @@ export default function ProblemList({ onSelectProblem }) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
+                <td colSpan={7} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
                   Loading problems from database...
                 </td>
               </tr>
             ) : problems.length === 0 ? (
               <tr>
-                <td colSpan={6} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
-                  {search || language !== 'all' || difficulty !== 'all'
+                <td colSpan={7} style={{ textAlign: 'center', padding: '3rem', color: '#888' }}>
+                  {search || language !== 'all' || difficulty !== 'all' || !includeSolved
                     ? 'No problems matched your search criteria.'
                     : 'No problems in the database. Use Upload Problems to import a dataset.'}
                 </td>
@@ -204,26 +287,21 @@ export default function ProblemList({ onSelectProblem }) {
                     </td>
 
                     <td style={{ padding: '0.85rem 1rem' }}>
-                      <div style={{ display: 'flex', flexDirection: 'column' }}>
-                        <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#eff2f6' }}>
-                          {p.title}
-                        </span>
-                        {p.tags && p.tags.length > 0 && (
-                          <div style={{ display: 'flex', gap: '0.3rem', marginTop: '0.2rem' }}>
-                            {p.tags.slice(0, 3).map((tag, tIdx) => (
-                              <span key={tIdx} style={{ fontSize: '0.65rem', color: '#888' }}>
-                                #{tag}
-                              </span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+                      <span style={{ fontSize: '0.9rem', fontWeight: 600, color: '#eff2f6' }}>
+                        {p.title}
+                      </span>
                     </td>
 
                     <td style={{ padding: '0.85rem 1rem' }}>
                       <span className={`badge badge-${p.difficulty ? p.difficulty.toLowerCase() : 'medium'}`}>
                         {p.difficulty || 'Medium'}
                       </span>
+                    </td>
+
+                    <td style={{ padding: '0.85rem 1rem', fontSize: '0.75rem', color: '#9ea3ab' }}>
+                      {p.tags && p.tags.length > 0
+                        ? p.tags.slice(0, 3).map(tag => `#${tag}`).join(' · ')
+                        : (taggingIds.has(p.id) ? 'Generating…' : '—')}
                     </td>
 
                     <td style={{ padding: '0.85rem 1rem' }}>
@@ -265,8 +343,27 @@ export default function ProblemList({ onSelectProblem }) {
           backgroundColor: '#262626',
           borderTop: '1px solid #333'
         }}>
-          <span style={{ fontSize: '0.8rem', color: '#888' }}>
-            Showing page {page} of {totalPages} ({total} total problems)
+          <span style={{ fontSize: '0.8rem', color: '#888', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+            Showing page
+            <input
+              aria-label="Page number"
+              inputMode="numeric"
+              value={pageInput}
+              onChange={(event) => setPageInput(event.target.value)}
+              onKeyDown={handlePageJump}
+              style={{
+                width: '3.75rem',
+                backgroundColor: '#1f1f1f',
+                color: '#ccc',
+                border: '1px solid #444',
+                borderRadius: '0.25rem',
+                padding: '0.2rem 0.35rem',
+                fontSize: '0.8rem',
+                textAlign: 'center',
+                outline: 'none'
+              }}
+            />
+            of {totalPages} ({total} total problems)
           </span>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

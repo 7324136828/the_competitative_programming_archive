@@ -131,6 +131,50 @@ class APITestCase(unittest.TestCase):
         self.assertEqual(body["result"]["status"], "Accepted")
         self.assertTrue(body["result"]["passed"])
 
+    def test_problem_list_can_exclude_or_select_solved_problems(self):
+        solved = self.create_problem(title="Solved")
+        unsolved = self.create_problem(title="Unsolved")
+        self.submit(solved["id"])
+
+        unsolved_body = self.assert_success(self.client.get("/api/problems?solved=unsolved"))
+        self.assertEqual(unsolved_body["total"], 1)
+        self.assertEqual(unsolved_body["problems"][0]["id"], unsolved["id"])
+        solved_body = self.assert_success(self.client.get("/api/problems?solved=solved"))
+        self.assertEqual(solved_body["total"], 1)
+        self.assertEqual(solved_body["problems"][0]["id"], solved["id"])
+        self.assertEqual(self.client.get("/api/problems?solved=maybe").status_code, 400)
+
+    def test_tag_batches_generate_only_for_untagged_problems_and_persist_once(self):
+        tagged = self.create_problem(title="Already tagged")
+        untagged = self.create_problem(title="Needs a tag", tags=[])
+        generated = {
+            "success": True,
+            "provider": "mock",
+            "model": "mock-assistant",
+            "tags": [{"problemId": untagged["id"], "tag": "Math"}],
+        }
+        with patch("backend.app.generate_problem_tags", return_value=generated) as generator:
+            body = self.assert_success(self.client.post(
+                "/api/llm/generate-tags",
+                json={"problemIds": [tagged["id"], untagged["id"]]},
+            ))
+        generator.assert_called_once()
+        self.assertEqual([item["problemId"] for item in body["tags"]], [tagged["id"], untagged["id"]])
+        self.assertEqual(self.database.get_problem(untagged["id"])["tags"], ["Math"])
+
+        with patch("backend.app.generate_problem_tags") as generator:
+            again = self.assert_success(self.client.post(
+                "/api/llm/generate-tags", json={"problemIds": [untagged["id"]]},
+            ))
+        generator.assert_not_called()
+        self.assertEqual(again["tags"][0]["tags"], ["Math"])
+
+    def test_tag_batch_rejects_more_than_six_or_duplicate_problem_ids(self):
+        for problem_ids in ([1, 2, 3, 4, 5, 6, 7], [1, 1], [], [True]):
+            with self.subTest(problem_ids=problem_ids):
+                response = self.client.post("/api/llm/generate-tags", json={"problemIds": problem_ids})
+                self.assertEqual(response.status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()
