@@ -31,7 +31,7 @@ export const KanbanScrumBoard: React.FC = () => {
     try {
       const [wfData, issueList] = await Promise.all([
         api.getWorkflow(currentProject.id),
-        api.getIssues({ projectId: currentProject.id }),
+        api.getIssues({ projectId: currentProject.id, board: true, compact: true }),
       ]);
       setStatuses(wfData.statuses || []);
       setIssues(issueList.filter((i: Issue) => i.type !== 'Subtask'));
@@ -113,7 +113,7 @@ export const KanbanScrumBoard: React.FC = () => {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="text-xl font-bold text-[#172B4D]">Active Board</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Kanban & Scrum execution with workflow transition enforcement (J-08)</p>
+          <p className="text-xs text-gray-500 mt-0.5">To Do shows sprint-planned work; unsprinted stories stay in the backlog.</p>
         </div>
 
         {/* Filter controls */}

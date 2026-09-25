@@ -27,16 +27,38 @@ export const BacklogView: React.FC = () => {
   const [isCreatingSprint, setIsCreatingSprint] = useState(false);
   const [newSprintName, setNewSprintName] = useState('');
   const [newSprintGoal, setNewSprintGoal] = useState('');
+  const [backlogPage, setBacklogPage] = useState(1);
+  const [backlogTotal, setBacklogTotal] = useState(0);
+  const [backlogTotalPages, setBacklogTotalPages] = useState(1);
+  const backlogPageSize = 25;
 
   const loadData = async () => {
     if (!currentProject) return;
     try {
-      const [sprintList, issueList] = await Promise.all([
+      const [sprintList, sprintIssueList, backlogResult] = await Promise.all([
         api.getSprints(currentProject.id),
-        api.getIssues({ projectId: currentProject.id }),
+        api.getIssues({
+          projectId: currentProject.id,
+          type: 'Story',
+          sprintAssigned: true,
+          compact: true,
+        }),
+        api.getIssues({
+          projectId: currentProject.id,
+          type: 'Story',
+          sprintId: 'none',
+          compact: true,
+          page: backlogPage,
+          limit: backlogPageSize,
+        }),
       ]);
       setSprints(sprintList);
-      setIssues(issueList);
+      setIssues([...sprintIssueList, ...backlogResult.issues]);
+      setBacklogTotal(backlogResult.total);
+      setBacklogTotalPages(backlogResult.totalPages);
+      if (backlogPage > backlogResult.totalPages) {
+        setBacklogPage(backlogResult.totalPages);
+      }
 
       const expandedMap: Record<string, boolean> = { backlog: true };
       sprintList.forEach((s: Sprint) => {
@@ -50,7 +72,11 @@ export const BacklogView: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [currentProject, refreshKey]);
+  }, [currentProject, refreshKey, backlogPage]);
+
+  useEffect(() => {
+    setBacklogPage(1);
+  }, [currentProject?.id]);
 
   const toggleSprintExpand = (sprintId: string) => {
     setExpandedSprints(prev => ({ ...prev, [sprintId]: !prev[sprintId] }));
@@ -263,7 +289,7 @@ export const BacklogView: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-[#172B4D]">Backlog</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Plan sprints, prioritize work, and estimate effort (J-05, J-06, J-07)</p>
+          <p className="text-xs text-gray-500 mt-0.5">All stories are planned here; unsprinted work is paged below.</p>
         </div>
 
         {canEdit && (
@@ -422,11 +448,11 @@ export const BacklogView: React.FC = () => {
               {expandedSprints['backlog'] ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
             <span className="font-bold text-xs text-[#172B4D]">Backlog</span>
-            <span className="text-[11px] text-gray-500 font-normal">{backlogIssues.length} issues</span>
+            <span className="text-[11px] text-gray-500 font-normal">{backlogTotal} stories</span>
           </div>
 
           <span className="text-xs font-semibold text-gray-600">
-            {backlogIssues.reduce((sum, i) => sum + (Number(i.story_points) || 0), 0)} pts
+            {backlogIssues.reduce((sum, i) => sum + (Number(i.story_points) || 0), 0)} pts on this page
           </span>
         </div>
 
@@ -436,6 +462,29 @@ export const BacklogView: React.FC = () => {
               <div className="py-8 text-center text-xs text-gray-400">Your backlog is clear!</div>
             ) : (
               backlogIssues.map((issue, idx, arr) => renderIssueRow(issue, idx, arr))
+            )}
+            {backlogTotalPages > 1 && (
+              <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-gray-50 text-xs text-gray-600">
+                <span>Page {backlogPage} of {backlogTotalPages}</span>
+                <div className="flex items-center space-x-2">
+                  <button
+                    type="button"
+                    disabled={backlogPage <= 1}
+                    onClick={() => setBacklogPage(page => Math.max(1, page - 1))}
+                    className="px-3 py-1 bg-white border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-100"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={backlogPage >= backlogTotalPages}
+                    onClick={() => setBacklogPage(page => Math.min(backlogTotalPages, page + 1))}
+                    className="px-3 py-1 bg-white border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-100"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
             )}
           </div>
         )}

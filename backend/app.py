@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import logging
 import os
 from pathlib import Path
 import threading
@@ -31,6 +32,13 @@ from .runtimes import available_languages
 from .seed import seed_database
 from .storage import DraftConflict, DraftProblemNotFound, DraftStore, export_submissions
 from .audio import AudioError, AudioQueueFull, AudioStore
+
+backend_logger = logging.getLogger('uvicorn.error')
+
+
+def env_opt_in(name: str) -> bool:
+    """Enable data-populating startup behavior only by explicit opt-in."""
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
 
 
 def json_object() -> dict:
@@ -112,7 +120,7 @@ def create_app(config: dict | None = None) -> Flask:
 
     app.config.from_mapping(
         DATABASE_PATH=os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH") or str(default_database_path()),
-        AUTO_SEED=os.environ.get("AUTO_SEED", "1").lower() not in ("0", "false", "no"),
+        AUTO_SEED=env_opt_in("AUTO_SEED"),
         SEED_PATH=str(ROOT / "problem.json"),
         CLIENT_DIST=str(ROOT / "frontend" / "dist"),
         MAX_CONTENT_LENGTH=max_upload_mb * 1024 * 1024,
@@ -354,6 +362,7 @@ def create_app(config: dict | None = None) -> Flask:
 
     @app.post("/api/problems/upload")
     def upload_problems():
+        backend_logger.info('Problem archive import request received; parsing JSON upload')
         if "file" in request.files:
             try:
                 parsed = json.loads(request.files["file"].read().decode("utf-8-sig"))
@@ -369,11 +378,29 @@ def create_app(config: dict | None = None) -> Flask:
             raw_problems = None
         if not isinstance(raw_problems, list) or not raw_problems:
             raise ValueError("Expected a non-empty array of problems or an object with a problems array.")
-        problems = [normalize_problem(problem) for problem in raw_problems]
+        backend_logger.info('Problem archive JSON parsed: %d entries', len(raw_problems))
+        problems = []
+        for index, raw_problem in enumerate(raw_problems, start=1):
+            title = raw_problem.get('title') if isinstance(raw_problem, dict) else '<non-object entry>'
+            log_title = ' '.join(str(title or 'Untitled Problem').split())[:160]
+            backend_logger.info(
+                'Problem archive processing entry %d/%d: %s',
+                index,
+                len(raw_problems),
+                log_title,
+            )
+            problems.append(normalize_problem(raw_problem))
         with mutation_lock:
+            backend_logger.info('Problem archive writing %d entries to SQLite', len(problems))
             inserted = database.bulk_insert(problems)
+            backend_logger.info('Problem archive linking imported problems to stories')
             linked_stories = backfill_problem_stories()
             total = database.count()
+        backend_logger.info(
+            'Problem archive import complete: %d inserted, %d stories linked',
+            inserted,
+            linked_stories,
+        )
         return jsonify(
             success=True,
             insertedCount=inserted,
@@ -654,7 +681,7 @@ def create_unified_app(flask_config: dict | None = None):
     from .jira.config import resolve_db_path
     from .jira.db import db as jira_database
     from .jira.main import app as jira_app, initialize_jira_data
-    from starlette.middleware.wsgi import WSGIMiddleware
+    from a2wsgi import WSGIMiddleware
 
     requested_config = dict(flask_config or {})
     unified_path = Path(
@@ -665,7 +692,7 @@ def create_unified_app(flask_config: dict | None = None):
     ).resolve()
     auto_seed = requested_config.get(
         "AUTO_SEED",
-        os.environ.get("AUTO_SEED", "1").lower() not in ("0", "false", "no"),
+        env_opt_in("AUTO_SEED"),
     )
     requested_config.update({"DATABASE_PATH": str(unified_path), "AUTO_SEED": False})
     flask_app = create_app(requested_config)
@@ -675,7 +702,7 @@ def create_unified_app(flask_config: dict | None = None):
     legacy_jira_path = Path(__file__).resolve().parent / 'data' / 'jira.db'
     should_migrate = requested_config.get(
         "MIGRATE_LEGACY_DATABASES",
-        not requested_config.get("TESTING", False),
+        env_opt_in("MIGRATE_LEGACY_DATABASES"),
     )
     migrations = merge_legacy_databases(
         unified_path,

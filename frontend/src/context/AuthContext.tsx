@@ -22,9 +22,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const data = await api.getUsers();
       setUsers(data);
+      const localAdmin = data.find((u: User) => u.id === 'u_admin' && u.role === 'Admin');
+      const admin = data.find((u: User) => u.role === 'Admin');
       const activeId = getActiveUserId();
-      const current = data.find((u: User) => u.id === activeId)
-        || data.find((u: User) => u.role === 'Admin')
+      const rememberedAdmin = data.find((u: User) => u.id === activeId && u.role === 'Admin');
+      // This local workspace starts in an administrator session so project
+      // creation and configuration are available immediately. Persona
+      // switching still works for permission testing until the next reload.
+      const current = localAdmin
+        || rememberedAdmin
+        || admin
         || data[0];
       if (current) {
         setCurrentUser(current);

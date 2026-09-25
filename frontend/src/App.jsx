@@ -53,6 +53,7 @@ const MainApp = () => {
     activeActivityIssue,
     closeActivity,
     openActivity,
+    openIssueDetail,
     isImportStoriesOpen,
     closeImportStories,
     isAiStoryOpen,
@@ -152,7 +153,7 @@ const MainApp = () => {
       />
 
       {/* App Body with Sidebar & Content */}
-      <div className="flex-1 flex overflow-hidden">
+      <div className="flex-1 min-h-0 flex overflow-hidden">
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
@@ -160,11 +161,14 @@ const MainApp = () => {
           setIsCollapsed={setIsSidebarCollapsed}
         />
 
-        <main className="flex-1 flex overflow-hidden bg-white">
+        <main className="flex-1 min-h-0 min-w-0 flex overflow-hidden bg-white">
           {activeTab === 'board' && <KanbanScrumBoard />}
           {activeTab === 'backlog' && <BacklogView />}
           {activeTab === 'problems' && (
-            <div className="flex-1 flex flex-col h-full bg-[#1c1c1c] text-white overflow-hidden">
+            <div
+              data-testid="problem-archive-scroll"
+              className="flex-1 min-h-0 min-w-0 h-full bg-[#1c1c1c] text-white overflow-auto"
+            >
               <ProblemList
                 onSelectProblem={handleSelectProblemFromList}
                 onOpenStory={openIssueDetail}
@@ -195,6 +199,10 @@ const MainApp = () => {
         <ActivityScreen
           issue={activeActivityIssue}
           onClose={closeActivity}
+          onOpenStory={(issueId) => {
+            closeActivity();
+            openIssueDetail(issueId);
+          }}
           onStatusUpdated={handleActivityStatusUpdated}
         />
       )}

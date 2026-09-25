@@ -17,6 +17,7 @@ class DatabasePathTests(unittest.TestCase):
         self.root = Path(temporary.name)
         for mock in (
             patch("backend.paths.ROOT", self.root),
+            patch("backend.paths.tempfile.gettempdir", return_value=str(self.root)),
             patch.dict(os.environ, {"DATABASE_PATH": ""}),
         ):
             mock.start()
@@ -26,7 +27,8 @@ class DatabasePathTests(unittest.TestCase):
         first = paths.default_database_path()
         self.assertEqual(first, paths.default_database_path())
         self.assertEqual(first, seed.default_database_path())
-        self.assertEqual(first, self.root / "backend" / "data" / "jira.db")
+        self.assertEqual(first.parent.parent, self.root / "codejudge")
+        self.assertEqual(first.name, "jira.db")
 
     def test_project_copies_have_separate_unified_databases(self):
         with patch.object(paths, "ROOT", self.root / "first-project"):

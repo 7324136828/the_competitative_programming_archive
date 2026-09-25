@@ -1,4 +1,5 @@
 import json
+import logging
 from ..db import db, SQL_NOW
 from ..util import new_id, now_iso
 from .users import get_default_user_id, is_user_eligible_for_assignment
@@ -6,6 +7,8 @@ from .workflows import is_transition_allowed
 from .automation import run_automation_trigger
 from .notifications import notify_watchers
 from .history import record_status_change, record_sprint_event
+
+logger = logging.getLogger('uvicorn.error')
 
 
 def _json_value(value, default):
@@ -80,7 +83,9 @@ def generate_issue_key(project_id: str) -> str:
     return f"{project['key']}-{max_num + 1}"
 
 
-def create_issue(input: dict, creator_id: str | None = None, source: str = 'user'):
+def create_issue(input: dict, creator_id: str | None = None, source: str = 'user', *,
+                 issue_key: str | None = None, rank: float | None = None,
+                 include_details: bool = True):
     if not input.get('summary') or not str(input['summary']).strip():
         raise ValueError('Validation error: Issue summary is required.')
     creator_id = creator_id or get_default_user_id()
@@ -125,9 +130,11 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
                 raise ValueError(
                     f"Archive problem {resolved_problem_id} is already linked to story {linked['key']}."
                 )
-        key = generate_issue_key(project_id)
-        max_rank = db.q1('SELECT MAX(rank) as max_rank FROM issues WHERE project_id = ?', project_id)
-        rank = (max_rank['max_rank'] or 0) + 1.0
+        key = issue_key or generate_issue_key(project_id)
+        issue_rank = rank
+        if issue_rank is None:
+            max_rank = db.q1('SELECT MAX(rank) as max_rank FROM issues WHERE project_id = ?', project_id)
+            issue_rank = (max_rank['max_rank'] or 0) + 1.0
 
         db.run(
             """INSERT INTO issues (
@@ -149,7 +156,7 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
             input.get('parentId') or None,
             input.get('sprintId') or None,
             input.get('versionId') or None,
-            rank,
+            issue_rank,
             input.get('storyPoints'),
             input.get('startDate') or None,
             input.get('dueDate') or None,
@@ -175,7 +182,13 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
             pass
 
         run_automation_trigger('ISSUE_CREATED', issue_id, project_id, creator_id)
-        return get_issue_by_id(issue_id)
+        if include_details:
+            return get_issue_by_id(issue_id)
+        return db.q1(
+            """SELECT id, key, type, story_type, parent_id, problem_id, status
+               FROM issues WHERE id = ?""",
+            issue_id,
+        )
 
     return db.with_transaction(_work)
 
@@ -265,7 +278,14 @@ def backfill_archive_story_links(project_id: str | None = None, creator_id: str 
 
     def _work():
         nonlocal next_key, rank
-        for problem in missing:
+        for index, problem in enumerate(missing, start=1):
+            log_title = ' '.join(str(problem.get('title') or 'Untitled Problem').split())[:160]
+            logger.info(
+                'Problem archive linking story %d/%d: %s',
+                index,
+                len(missing),
+                log_title,
+            )
             issue_id = new_id('issue')
             key = f"{project['key']}-{next_key}"
             next_key += 1
@@ -647,9 +667,16 @@ def get_worklogs(issue_id: str):
     )
 
 
-def search_issues(filter: dict):
-    sql = """
-        SELECT i.*,
+def search_issues(filter: dict, *, page: int | None = None, limit: int | None = None,
+                  compact: bool = False):
+    issue_columns = """i.id, i.key, i.project_id, i.type, i.story_type, i.summary,
+                       '' AS description, i.status, i.priority, i.difficulty,
+                       i.assignee_id, i.reporter_id, i.parent_id, i.sprint_id,
+                       i.version_id, i.rank, i.story_points, i.start_date, i.due_date,
+                       i.original_estimate_minutes, i.remaining_estimate_minutes,
+                       i.problem_id, i.submission_status, i.created_at, i.updated_at""" if compact else 'i.*'
+    sql = f"""
+        SELECT {issue_columns},
                p.name as project_name, p.key as project_key,
                u.name as assignee_name, u.avatar as assignee_avatar,
                s.name as sprint_name,
@@ -692,10 +719,29 @@ def search_issues(filter: dict):
         else:
             sql += ' AND i.sprint_id = ?'
             params.append(filter['sprintId'])
+    elif filter.get('sprintAssigned'):
+        sql += ' AND i.sprint_id IS NOT NULL'
+    if filter.get('board'):
+        sql += " AND (i.status != 'To Do' OR i.sprint_id IS NOT NULL)"
     if filter.get('versionId'):
         sql += ' AND i.version_id = ?'
         params.append(filter['versionId'])
+    total = None
+    if page is not None or limit is not None:
+        page = max(int(page or 1), 1)
+        limit = min(max(int(limit or 50), 1), 100)
+        total = db.q1(f'SELECT COUNT(*) AS count FROM ({sql}) AS filtered', *params)['count']
     sql += ' ORDER BY i.rank ASC, i.created_at DESC'
+    if total is not None:
+        sql += ' LIMIT ? OFFSET ?'
+        rows = db.q(sql, *params, limit, (page - 1) * limit)
+        return {
+            'issues': rows,
+            'total': total,
+            'page': page,
+            'limit': limit,
+            'totalPages': max(1, (total + limit - 1) // limit),
+        }
     return db.q(sql, *params)
 
 

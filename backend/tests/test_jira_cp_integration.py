@@ -7,6 +7,7 @@
 - AI generation of coding and non-coding stories
 """
 
+import json
 import unittest
 import tempfile
 from pathlib import Path
@@ -206,6 +207,63 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         problem = self.client.get(f'/api/problems/{problem_id}').json()['problem']
         self.assertEqual(problem['story_id'], imported[0]['id'])
         self.assertEqual(problem['story_key'], imported[0]['key'])
+
+    def test_file_import_uses_multipart_and_returns_compact_results(self):
+        payload = [{
+            'title': 'Multipart Learning Story',
+            'description': 'Imported without loading the dataset into the browser editor.',
+            'story_type': 'learning',
+        }]
+
+        with self.assertLogs('uvicorn.error', level='INFO') as logs:
+            response = self.client.post(
+                '/api/issues/import-stories/file',
+                headers={'x-user-id': 'u_alex'},
+                data={
+                    'projectId': 'proj_cp',
+                    'epicName': 'Multipart Import Epic',
+                    'featureName': 'Multipart Problem Set',
+                },
+                files={
+                    'file': ('stories.json', json.dumps(payload).encode('utf-8'), 'application/json'),
+                },
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        data = response.json()
+        self.assertEqual(data['stories_created'], 1)
+        self.assertEqual(data['features_created'], 1)
+        self.assertEqual(data['epics_created'], 1)
+        self.assertEqual(data['stories'], [])
+        imported = db.q1(
+            "SELECT story_type, description FROM issues WHERE summary = ?",
+            'Multipart Learning Story',
+        )
+        self.assertEqual(imported['story_type'], 'learning')
+        self.assertEqual(imported['description'], payload[0]['description'])
+        self.assertTrue(any(
+            'processing entry 1/1: Multipart Learning Story' in message
+            for message in logs.output
+        ))
+
+    def test_backlog_is_paged_and_board_hides_unsprinted_todo_stories(self):
+        backlog = self.client.get(
+            '/api/issues?projectId=proj_cp&type=Story&sprintId=none&page=1&limit=2&compact=true'
+        )
+        self.assertEqual(backlog.status_code, 200, backlog.text)
+        page = backlog.json()
+        self.assertEqual(page['page'], 1)
+        self.assertEqual(page['limit'], 2)
+        self.assertLessEqual(len(page['issues']), 2)
+        self.assertGreaterEqual(page['totalPages'], 1)
+        self.assertTrue(all(issue['type'] == 'Story' for issue in page['issues']))
+        self.assertTrue(all(issue['description'] == '' for issue in page['issues']))
+
+        board = self.client.get('/api/issues?projectId=proj_cp&board=true&compact=true')
+        self.assertEqual(board.status_code, 200, board.text)
+        todo_items = [issue for issue in board.json() if issue['status'] == 'To Do']
+        self.assertTrue(todo_items)
+        self.assertTrue(all(issue['sprint_id'] is not None for issue in todo_items))
 
     def test_ai_story_generation(self):
         # 1. AI Coding Story

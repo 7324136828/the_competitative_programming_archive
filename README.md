@@ -115,17 +115,29 @@ precedence over values in `.env`.
 | `BACKEND_PORT` | `3001` | First backend port to try |
 | `FRONTEND_PORT` | `5173` | First frontend port to try |
 | `BACKEND_HOST` | `127.0.0.1` | Backend bind address |
-| `DATABASE_PATH` | `backend/data/jira.db` | Single SQLite database shared by projects, stories, problems, submissions, and settings |
+| `DATABASE_PATH` | `%TEMP%/codejudge/<project-id>/jira.db` | Single SQLite database shared by projects, stories, problems, submissions, and settings |
 | `WORKSPACE_STORAGE_DIR` | `data/workspace/<database-id>` | Saved editor drafts and narration files |
 | `CONNECTOR_BASE_URL` | `http://127.0.0.1:8301/v1` | The Connector API for AI and speech requests |
 | `CONNECTOR_SPEECH_TIMEOUT_SECONDS` | `180` | Timeout for Connector speech generation |
 | `LLM_MODEL` | First discovered model | Active Connector configuration ID |
+| `AUTO_SEED` | `0` | Set to `1` to import sample problems into a new, empty database |
+| `MIGRATE_LEGACY_DATABASES` | `0` | Set to `1` to import data from legacy database locations |
 
 The application uses one physical SQLite file for both project/story data and
-competitive-programming data. On the first unified startup, an existing legacy
-problem archive is imported when the unified problem tables are empty. Its
+competitive-programming data. When `MIGRATE_LEGACY_DATABASES=1`, an existing
+legacy problem archive is imported if the unified problem tables are empty. Its
 database file is retained as a backup, and missing draft/audio workspace files
 are copied without overwriting newer files.
+
+The default database lives beneath the operating system's temporary directory.
+Each repository checkout receives a stable project ID so separate copies do not
+share data. Set `DATABASE_PATH` to use a durable location because operating
+system cleanup can remove files from `%TEMP%`.
+
+New databases start with no problems or stories. The required local admin and
+default project are still created. Sample problems (and their linked coding
+stories) are added only when `AUTO_SEED=1` is explicitly configured; legacy
+problems and stories are imported only when `MIGRATE_LEGACY_DATABASES=1`.
 
 ## API
 

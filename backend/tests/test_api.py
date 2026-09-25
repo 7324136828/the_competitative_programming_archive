@@ -100,13 +100,17 @@ class APITestCase(unittest.TestCase):
         record["tags"] = json.dumps(record["tags"])
         record["sample_input_output"] = json.dumps(record["sample_input_output"])
         content = json.dumps({"problems": [record]}, ensure_ascii=False).encode("utf-8-sig")
-        body = self.assert_success(
-            self.client.post(
-                "/api/problems/upload",
-                data={"file": (BytesIO(content), "problems.json")},
-                content_type="multipart/form-data",
+        with self.assertLogs("uvicorn.error", level="INFO") as logs:
+            body = self.assert_success(
+                self.client.post(
+                    "/api/problems/upload",
+                    data={"file": (BytesIO(content), "problems.json")},
+                    content_type="multipart/form-data",
+                )
             )
-        )
+        output = "\n".join(logs.output)
+        self.assertIn("Problem archive processing entry 1/1:", output)
+        self.assertIn("Problem archive import complete", output)
         self.assertEqual(body["totalNow"], 1)
         imported = self.assert_success(self.client.get("/api/problems/1"))["problem"]
         self.assertEqual(imported["title"], record["title"])

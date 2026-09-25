@@ -7,25 +7,30 @@ from .services.projects import create_project_with_default_workflow
 from .util import generate_avatar
 
 BOOTSTRAP_PROJECT_FLAG = 'bootstrap.default_project_created'
+BOOTSTRAP_ADMIN_ID = 'u_admin'
 
 
 def ensure_bootstrap_data():
-    user_count = db.q1('SELECT COUNT(*) as c FROM users')['c']
-    if user_count == 0:
+    # Every workspace has one stable identity for the default local login,
+    # even when imported or demo data already contains other administrators.
+    local_admin = db.q1('SELECT id, role FROM users WHERE id = ?', BOOTSTRAP_ADMIN_ID)
+    if local_admin:
+        if local_admin['role'] != 'Admin':
+            db.run('UPDATE users SET role = ? WHERE id = ?', 'Admin', BOOTSTRAP_ADMIN_ID)
+    else:
         db.run(
             'INSERT INTO users (id, name, email, avatar, role) VALUES (?, ?, ?, ?, ?)',
-            'u_admin', 'Admin', 'admin@localhost', generate_avatar('Admin'), 'Admin',
+            BOOTSTRAP_ADMIN_ID, 'Admin', 'admin@localhost', generate_avatar('Admin'), 'Admin',
         )
 
     project_count = db.q1('SELECT COUNT(*) as c FROM projects')['c']
     flag = db.q1('SELECT value FROM app_settings WHERE key = ?', BOOTSTRAP_PROJECT_FLAG)
     if project_count == 0 and not flag:
-        default_user = db.q1('SELECT id FROM users ORDER BY rowid ASC LIMIT 1')
         create_project_with_default_workflow(
             key='PROJ',
             name='My Project',
             description='Default project created on first start',
-            lead_id=default_user['id'] if default_user else None,
+            lead_id=BOOTSTRAP_ADMIN_ID,
         )
         db.run(
             "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, " + "strftime('%Y-%m-%dT%H:%M:%fZ','now')" + ")",

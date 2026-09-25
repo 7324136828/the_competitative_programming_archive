@@ -50,7 +50,7 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setCurrentProject(null);
         return;
       }
-      const wanted = selectId || currentProject?.id || localStorage.getItem('jira_active_project_id');
+      const wanted = selectId || localStorage.getItem('jira_active_project_id') || currentProject?.id;
       const match = data.find((p: Project) => p.id === wanted) || data[0];
       if (match.id !== currentProject?.id) {
         setCurrentProject(match);

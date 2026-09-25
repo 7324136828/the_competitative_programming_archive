@@ -101,11 +101,20 @@ def stop(process: subprocess.Popen[bytes] | None) -> None:
     if os.name == "nt":
         # Python venv launchers and npm can create descendants. Stop only our
         # owned process tree, including the underlying interpreter/Vite worker.
-        subprocess.run(
-            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
+        # taskkill can itself hang while a console process is handling Ctrl+C,
+        # so bound the wait and still terminate the direct child as a fallback.
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=5,
+            )
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            try:
+                process.kill()
+            except OSError:
+                pass
     else:
         try:
             os.killpg(process.pid, signal.SIGTERM)
@@ -113,12 +122,21 @@ def stop(process: subprocess.Popen[bytes] | None) -> None:
             return
     try:
         process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
         if os.name == "nt":
-            process.kill()
+            try:
+                process.kill()
+            except OSError:
+                pass
         else:
-            os.killpg(process.pid, signal.SIGKILL)
-        process.wait(timeout=5)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                return
+        try:
+            process.wait(timeout=5)
+        except (subprocess.TimeoutExpired, KeyboardInterrupt):
+            pass
 
 
 def process_options() -> dict:
@@ -249,8 +267,8 @@ def main() -> int:
         print("\n[run] Stopping services...")
         return 0
     finally:
-        stop(frontend_process)
         stop(backend_process)
+        stop(frontend_process)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
 

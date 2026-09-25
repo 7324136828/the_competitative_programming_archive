@@ -36,12 +36,14 @@ export function registerActivityHandler(type: string, component: React.Component
 interface ActivityScreenProps {
   issue: Issue | null;
   onClose: () => void;
+  onOpenStory?: (issueId: string) => void;
   onStatusUpdated?: (issueId: string, newStatus: string) => void;
 }
 
 export const ActivityScreen: React.FC<ActivityScreenProps> = ({
   issue,
   onClose,
+  onOpenStory,
   onStatusUpdated,
 }) => {
   const [currentStatus, setCurrentStatus] = useState<string>(issue?.status || 'To Do');
@@ -113,6 +115,18 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
 
         {/* Badges & Meta */}
         <div className="flex items-center space-x-2 shrink-0">
+          {onOpenStory && issue.type === 'Story' && !String(issue.id).startsWith('problem-') && (
+            <button
+              type="button"
+              onClick={() => onOpenStory(issue.id)}
+              className="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-semibold transition"
+              title={`Open original story ${issue.key}`}
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span>Navigate to story</span>
+            </button>
+          )}
+
           {/* Story Type Badge */}
           {storyType === 'coding' && (
             <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-500/20 text-blue-300 border border-blue-500/30">

@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from backend.app import create_unified_app
 from backend.jira.db import db
 from backend.jira.seed import ensure_bootstrap_data, seed_demo_data
+from backend.jira.services.users import get_default_user_id
 
 
 class AdminPurgeTests(unittest.TestCase):
@@ -80,8 +81,10 @@ class AdminPurgeTests(unittest.TestCase):
         self.assertEqual(body['deleted']['submissions'], 1)
         self.assertEqual(archive.count(), 0)
         self.assertEqual(db.q1('SELECT COUNT(*) AS c FROM issues')['c'], 0)
-        self.assertEqual(db.q1('SELECT COUNT(*) AS c FROM users')['c'], 1)
-        self.assertEqual(db.q1('SELECT role FROM users')['role'], 'Admin')
+        self.assertEqual(db.q1(
+            "SELECT role FROM users WHERE id = 'u_admin'"
+        )['role'], 'Admin')
+        self.assertEqual(get_default_user_id(), 'u_admin')
         self.assertEqual(db.q1('SELECT COUNT(*) AS c FROM projects')['c'], 1)
 
 
