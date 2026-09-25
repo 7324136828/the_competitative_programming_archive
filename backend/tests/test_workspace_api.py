@@ -149,7 +149,7 @@ class WorkspaceAPITests(unittest.TestCase):
                 time.sleep(0.01)
             self.assertEqual(audio["status"], "ready", audio)
             speech.assert_called_once()
-            self.assertIn("Checksum", speech.call_args.args[0]["input"])
+            self.assertIn("Checksum", speech.call_args.args[0]["content"])
         restarted = self.make_app().test_client()
         self.assertEqual(restarted.post("/api/audio/responses", json=payload).status_code, 200)
         with patch("backend.app.send_file", side_effect=FileNotFoundError("concurrent cleanup")):
@@ -171,7 +171,7 @@ class WorkspaceAPITests(unittest.TestCase):
 
     def test_response_audio_validation_and_busy_status(self):
         for payload in (None, {}, {"text": " "}, {"text": {}}, {"text": "Read", "language": []},
-                        {"text": "Read", "language": "xx"}, {"text": "x" * 40_001}):
+                        {"text": "Read", "language": "x" * 31}, {"text": "x" * 40_001}):
             with self.subTest(payload_type=type(payload).__name__):
                 self.assertEqual(self.client.post("/api/audio/responses", json=payload).status_code, 400)
         with patch.object(self.app.extensions["audio_store"], "start_text", side_effect=AudioQueueFull("Busy")):

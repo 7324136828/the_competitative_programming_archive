@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Run CodeJudge, Vite, and the standalone Python 3.12 Kokoro service."""
+"""Run the CodeJudge backend and Vite frontend."""
 
 from __future__ import annotations
 
 import argparse
 import ipaddress
-import json
 import os
 import shutil
 import signal
@@ -14,11 +13,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from urllib.error import URLError
-from urllib.parse import urlsplit, urlunsplit
-from urllib.request import ProxyHandler, build_opener
 
-from launcher_config import KOKORO_PYTHON, KOKORO_SERVER, kokoro_device, load_env_file
+from launcher_config import load_env_file
 
 ROOT = Path(__file__).resolve().parent
 FRONTEND = ROOT / "frontend"
@@ -39,14 +35,12 @@ def in_active_environment() -> bool:
     )
 
 
-def select_runtime(*, skip_kokoro: bool = False) -> Path:
+def select_runtime() -> Path:
     if in_active_environment():
         return Path(sys.executable)
     if not LOCAL_PYTHON.is_file():
         print("[run] No active environment or local .venv; running setup...")
         command = [sys.executable, str(ROOT / "setup.py")]
-        if skip_kokoro:
-            command.append("--skip-kokoro")
         if subprocess.call(command, cwd=ROOT):
             raise RunError("Setup failed")
     if not LOCAL_PYTHON.is_file():
@@ -134,116 +128,17 @@ def process_options() -> dict:
     return {"start_new_session": True}
 
 
-def kokoro_url(base_url: str):
-    try:
-        parsed = urlsplit(base_url)
-        port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
-    except ValueError as error:
-        raise RunError("KOKORO_BASE_URL contains an invalid port or address.") from error
-    if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise RunError("KOKORO_BASE_URL must be an HTTP(S) service URL without credentials or a query.")
-    if not 1 <= port <= 65535:
-        raise RunError("KOKORO_BASE_URL port must be between 1 and 65535.")
-    path = parsed.path.rstrip("/")
-    health_path = path.removesuffix("/v1") + "/health"
-    health_url = urlunsplit((parsed.scheme, parsed.netloc, health_path, "", ""))
-    return parsed, port, health_url
-
-
-def kokoro_base_url(base_url: str, port: int) -> str:
-    """Override a speech service port while preserving its host and API prefix."""
-    port = parse_port(port, "Kokoro backend port")
-    parsed, _, _ = kokoro_url(base_url)
-    host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
-    return urlunsplit((parsed.scheme, f"{host}:{port}", parsed.path, "", ""))
-
-
-def read_kokoro_health(health_url: str) -> dict | None:
-    try:
-        with build_opener(ProxyHandler({})).open(health_url, timeout=1) as response:
-            body = json.loads(response.read(65536).decode("utf-8"))
-        return body if isinstance(body, dict) else None
-    except (URLError, OSError, ValueError):
-        return None
-
-
-def validate_kokoro_health(health: dict, device: str) -> None:
-    if health.get("service") != "python-kokoro" or health.get("status") != "ok":
-        raise RunError("The configured Kokoro address belongs to an incompatible service.")
-    if not str(health.get("python", "")).startswith("3.12."):
-        raise RunError("Kokoro must run with its standalone Python 3.12 interpreter.")
-    if device != "auto" and health.get("device") != device:
-        raise RunError(
-            f"Kokoro is running on {health.get('device')}, but {device} was requested. "
-            "Restart the speech service with the requested device "
-            "(Windows: python-kokoro/run.ps1 -Device " + device + " -Restart)."
-        )
-
-
-def start_kokoro(base_url: str, device: str, *, timeout: float = 60) -> subprocess.Popen | None:
-    """Reuse a compatible service, or own a local child until CodeJudge exits."""
-    parsed, port, health_url = kokoro_url(base_url)
-    health = read_kokoro_health(health_url)
-    if health is not None:
-        validate_kokoro_health(health, device)
-        print(f"[run] Reusing Kokoro ({health['device']}, Python {health['python']}).", flush=True)
-        return None
-    if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost") or parsed.path.rstrip("/") not in ("", "/v1"):
-        raise RunError("The configured external Kokoro service is unavailable. Start it before running CodeJudge.")
-    if not KOKORO_PYTHON.is_file() or not KOKORO_SERVER.is_file():
-        raise RunError("Kokoro is not set up. Run setup.py --kokoro-only (Python 3.12 required).")
-    try:
-        check = subprocess.run(
-            [str(KOKORO_PYTHON), "-c", "import sys; sys.exit(0 if sys.version_info[:2] == (3, 12) else 1)"],
-            capture_output=True, timeout=15, check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as error:
-        raise RunError("Cannot start Kokoro's Python 3.12 interpreter. Run setup.py --kokoro-only.") from error
-    if check.returncode:
-        raise RunError("Kokoro's environment must use Python 3.12. Run setup.py --kokoro-only.")
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-        try:
-            probe.bind(("127.0.0.1", port))
-        except OSError as error:
-            raise RunError(f"Kokoro port {port} is occupied by an unresponsive or incompatible service.") from error
-    command = [str(KOKORO_PYTHON), "-u", str(KOKORO_SERVER), "--host", "127.0.0.1", "--port", str(port), "--device", device]
-    print(f"[run] Starting standalone Python 3.12 Kokoro ({device})...", flush=True)
-    try:
-        process = subprocess.Popen(command, cwd=ROOT, **process_options())
-    except OSError as error:
-        raise RunError("Unable to launch the Kokoro service. Run setup.py --kokoro-only.") from error
-    try:
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RunError("Kokoro exited during startup. Check its output and run setup.py --kokoro-only.")
-            health = read_kokoro_health(health_url)
-            if health is not None:
-                validate_kokoro_health(health, device)
-                print(f"[run] Kokoro ready ({health['device']}, Python {health['python']}).", flush=True)
-                return process
-            time.sleep(0.25)
-        raise RunError(f"Kokoro did not become healthy within {timeout:g} seconds.")
-    except BaseException:
-        stop(process)
-        raise
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
-        epilog="Example: run.py serve --lan --frontend-port 8080 --backend-port 8000 "
-               "--kokoro-backend-port 8890. Busy frontend/backend ports advance to the next free port; "
-               "Kokoro uses the exact requested port and reuses a compatible service there.",
+        epilog="Example: run.py serve --lan --frontend-port 8080 --backend-port 8000. "
+               "Busy frontend/backend ports advance to the next free port.",
     )
     parser.add_argument("command", nargs="?", choices=("serve",), default="serve", help="start the application (default)")
     parser.add_argument("--lan", action="store_true", help="share the app on your LAN through the frontend port")
     parser.add_argument("--backend-port", type=int, metavar="PORT", help="first backend port to try (1-65535; overrides PORT/BACKEND_PORT; default 3001)")
     parser.add_argument("--frontend-port", type=int, metavar="PORT", help="first frontend port to try (1-65535; overrides FRONTEND_PORT; default 5173)")
-    parser.add_argument("--kokoro-backend-port", type=int, metavar="PORT", help="Kokoro port (1-65535; overrides the port in KOKORO_BASE_URL; default 8880)")
     parser.add_argument("--host", default=os.environ.get("HOST") or os.environ.get("BACKEND_HOST", "127.0.0.1"), help="backend bind address")
-    parser.add_argument("--kokoro-device", choices=("cuda", "cpu", "auto"), help="speech device (default KOKORO_DEVICE or cuda)")
-    parser.add_argument("--skip-kokoro", action="store_true", help="do not start or validate the speech service")
     return parser.parse_args()
 
 
@@ -258,39 +153,20 @@ def main() -> int:
         args.frontend_port if args.frontend_port is not None else os.environ.get("FRONTEND_PORT", "5173"),
         "frontend port",
     )
-    kokoro_base = os.environ.get("KOKORO_BASE_URL") or "http://127.0.0.1:8880"
-    if args.kokoro_backend_port is not None:
-        kokoro_base = kokoro_base_url(kokoro_base, args.kokoro_backend_port)
-        # Pass the override through runtime bootstrap/re-execution and to the
-        # application, including when speech is managed with --skip-kokoro.
-        os.environ["KOKORO_BASE_URL"] = kokoro_base
-    device = None
-    if not args.skip_kokoro:
-        try:
-            device = kokoro_device(args.kokoro_device)
-        except ValueError as error:
-            raise RunError(str(error)) from error
-        os.environ["KOKORO_DEVICE"] = device
-    runtime = select_runtime(skip_kokoro=args.skip_kokoro)
+    runtime = select_runtime()
     if Path(sys.executable).resolve() != runtime.resolve():
         return subprocess.call([str(runtime), str(Path(__file__).resolve()), *sys.argv[1:]])
 
-    reserved = set()
-    if not args.skip_kokoro or args.kokoro_backend_port is not None:
-        parsed, kokoro_port, _ = kokoro_url(kokoro_base)
-        if parsed.hostname in ("127.0.0.1", "localhost", "::1"):
-            reserved.add(kokoro_port)
     host = args.host
-    backend_port = available_port(requested_backend, reserved, host=host)
+    backend_port = available_port(requested_backend, set(), host=host)
     frontend_bind = "0.0.0.0" if args.lan else "127.0.0.1"
-    frontend_port = available_port(requested_frontend, reserved | {backend_port}, host=frontend_bind)
+    frontend_port = available_port(requested_frontend, {backend_port}, host=frontend_bind)
     backend_url = backend_connect_url(host, backend_port)
     frontend_url = f"http://localhost:{frontend_port}"
 
     backend_env = os.environ.copy()
     backend_env["PORT"] = str(backend_port)
     backend_env["HOST"] = host
-    backend_env["KOKORO_BASE_URL"] = kokoro_base
 
     frontend_env = os.environ.copy()
     frontend_env["VITE_BACKEND_URL"] = backend_url
@@ -316,10 +192,7 @@ def main() -> int:
             print(f"LAN:      http://{address}:{frontend_port}")
         if not addresses:
             print(f"LAN:      http://<this-computer-LAN-IP>:{frontend_port}")
-    if not args.skip_kokoro:
-        # Validate before displaying the address, which must not contain credentials.
-        kokoro_url(kokoro_base)
-        print(f"Kokoro:   {kokoro_base} ({device}, standalone Python 3.12)")
+    print(f"Connector: {os.environ.get('CONNECTOR_BASE_URL', 'http://127.0.0.1:8301/v1')} (LLM and speech)")
     print("Press Ctrl+C to stop services started by this launcher.")
     print("=" * 62, flush=True)
 
@@ -346,7 +219,7 @@ def main() -> int:
 
     backend_process: subprocess.Popen[bytes] | None = None
     frontend_process: subprocess.Popen[bytes] | None = None
-    kokoro_process: subprocess.Popen[bytes] | None = None
+
     def request_shutdown(_signum, _frame):
         raise KeyboardInterrupt
 
@@ -356,8 +229,6 @@ def main() -> int:
         if signum is not None:
             previous_handlers[signum] = signal.signal(signum, request_shutdown)
     try:
-        if not args.skip_kokoro:
-            kokoro_process = start_kokoro(kokoro_base, device)
         backend_process = subprocess.Popen(backend_command, cwd=ROOT, env=backend_env, **process_options())
         frontend_process = subprocess.Popen(
             frontend_command, cwd=FRONTEND, env=frontend_env, **process_options()
@@ -366,7 +237,6 @@ def main() -> int:
             for label, process in (
                 ("Backend", backend_process),
                 ("Frontend", frontend_process),
-                ("Kokoro", kokoro_process),
             ):
                 if process is None:
                     continue
@@ -381,7 +251,6 @@ def main() -> int:
     finally:
         stop(frontend_process)
         stop(backend_process)
-        stop(kokoro_process)
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)
 

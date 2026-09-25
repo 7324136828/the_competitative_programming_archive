@@ -8,7 +8,6 @@ else
     if [ -x ".venv/bin/python" ]; then
         PYTHON_BIN=".venv/bin/python"
     else
-        # Let run.py forward its Kokoro options when it bootstraps setup.
         PYTHON_BIN="$(command -v python3 || command -v python)"
     fi
 fi

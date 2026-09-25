@@ -3,7 +3,8 @@
 CodeJudge is a local competitive programming workspace built with React, Vite,
 Flask, and SQLite. Browse problems, write or upload solutions, run test cases,
 and track submissions. AI tools provide hints, explanations, and generated
-problems, with Markdown and LaTeX rendering and saved Kokoro narration.
+problems, with Markdown and LaTeX rendering and saved speech narration through
+The Connector.
 
 Editor drafts save to disk, submission history can be exported as a ZIP, and
 the workspace can be shared with devices on your LAN. See
@@ -33,7 +34,7 @@ panels, upload source files, and save drafts automatically.
 ### AI assistant
 
 Discuss the current problem with formatted explanations, mathematical formulas,
-and code examples. Read-aloud controls generate saved Kokoro audio.
+and code examples. Read-aloud controls generate saved Connector-backed audio.
 
 ![CodeJudge AI assistant displaying a formatted response with math and read-aloud controls](docs/screenshots/ai-assistant.png)
 
@@ -63,18 +64,10 @@ If a Python virtual environment or Conda environment is already active, setup
 installs into that environment and run uses the same interpreter. Otherwise,
 the scripts create and reuse `.venv` in this project.
 
-The root setup also prepares Kokoro in a separate Python 3.12 environment at
-`python-kokoro/.venv`, with CUDA acceleration by default. Install Python 3.12
-alongside your application Python. The root runner starts Kokoro and waits for
-it to be ready before launching CodeJudge, or reuses a compatible service
-already running at the configured address (port 8880 by default). Services it
-starts stop with Ctrl+C; a reused Kokoro service keeps running.
-
-For CPU-only machines, use `setup.bat --kokoro-device cpu` and
-`run.bat --kokoro-device cpu` (or the equivalent `.sh` wrappers).
-Set `KOKORO_DEVICE=cpu` in `.env` to remember that choice. To update only the
-speech environment, run `python setup.py --kokoro-only`.
-`--skip-kokoro` leaves speech setup/startup to you.
+Start The Connector before CodeJudge. CodeJudge uses its configured
+`CONNECTOR_BASE_URL` for both LLM requests and speech. The Connector owns the
+Kokoro runtime, voice, language, speed, and device configuration; this project
+does not install or launch a separate speech service.
 
 To open CodeJudge from another device on the same LAN, run:
 
@@ -88,14 +81,14 @@ Its equivalent command is `python run.py serve --lan`, or
 `./run.sh serve --lan` on Linux/macOS. The frontend handles API and narration
 requests through its local backend proxy. Devices share the same stored data.
 
-Choose frontend, backend, and Kokoro ports independently:
+Choose the frontend and backend ports independently:
 
 ```powershell
 # Local access
-.\run.bat --frontend-port 8080 --backend-port 8000 --kokoro-backend-port 8890
+.\run.bat --frontend-port 8080 --backend-port 8000
 
 # LAN access
-.\run_lan.bat --frontend-port 8080 --backend-port 8000 --kokoro-backend-port 8890
+.\run_lan.bat --frontend-port 8080 --backend-port 8000
 ```
 
 The same flags work with `python run.py` and `./run.sh`. Open the printed
@@ -104,14 +97,6 @@ Command-line ports override environment variables and `.env` settings. To
 remember your choices, set `FRONTEND_PORT=8080` and `BACKEND_PORT=8000` in `.env`.
 The legacy `PORT` environment variable takes precedence over `BACKEND_PORT`
 when no `--backend-port` is supplied.
-
-`--kokoro-backend-port` replaces only the port in `KOKORO_BASE_URL`, preserving
-its host, scheme, and path. The application backend automatically receives the
-updated speech URL; `.env` is unchanged. To remember the Kokoro port, set
-`KOKORO_BASE_URL=http://127.0.0.1:8890` in `.env`. Kokoro uses the exact requested
-port: a compatible service is reused, and an incompatible occupied port reports
-an error. With `--skip-kokoro`, the flag still configures the speech URL but does
-not start the speech service.
 
 The default backend and frontend ports are `3001` and `5173`. The runner checks
 both ports before launch and advances to the next available port when needed.
@@ -132,10 +117,9 @@ precedence over values in `.env`.
 | `BACKEND_HOST` | `127.0.0.1` | Backend bind address |
 | `DATABASE_PATH` | System temporary directory under `codejudge/<project-id>/leetcode.db` | SQLite database; set an explicit path for long-term storage |
 | `WORKSPACE_STORAGE_DIR` | `data/workspace/<database-id>` | Saved editor drafts and narration files |
-| `CONNECTOR_BASE_URL` | `http://127.0.0.1:8301/v1` | The Connector API for AI model discovery and requests |
+| `CONNECTOR_BASE_URL` | `http://127.0.0.1:8301/v1` | The Connector API for AI and speech requests |
+| `CONNECTOR_SPEECH_TIMEOUT_SECONDS` | `180` | Timeout for Connector speech generation |
 | `LLM_MODEL` | First discovered model | Active Connector configuration ID |
-| `KOKORO_BASE_URL` | `http://127.0.0.1:8880` | Standalone speech service |
-| `KOKORO_DEVICE` | `cuda` | Speech acceleration device (`cuda` or `cpu`) |
 
 ## API
 
@@ -190,11 +174,10 @@ npm run install:webkit
 backend/                  Flask application, SQLite store, and unit tests
 frontend/                 React/Vite application and frontend unit tests
 e2e/                      Standalone TypeScript Playwright end-to-end tests
-python-kokoro/            Standalone Python 3.12 speech service
 data/workspace/           Saved editor drafts and cached narration (ignored)
 docs/                     Feature documentation and application screenshots
 tests/                    Root setup and launcher tests
 setup.py / setup.*        Cross-platform dependency setup
-run.py / run.*            Combined backend/frontend/Kokoro runner
+run.py / run.*            Combined backend/frontend runner
 run_lan.bat               Windows launcher for LAN access
 ```

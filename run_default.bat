@@ -1,1 +1,1 @@
-call run_lan.bat --frontend-port 5100 --backend-port 8011 --kokoro-backend-port 8012
+call run_lan.bat --frontend-port 5100 --backend-port 8011

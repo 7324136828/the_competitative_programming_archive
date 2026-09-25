@@ -6,9 +6,6 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-KOKORO_DIR = ROOT / "python-kokoro"
-KOKORO_PYTHON = KOKORO_DIR / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-KOKORO_SERVER = KOKORO_DIR / "server.py"
 
 
 def load_env_file(path: Path = ROOT / ".env") -> None:
@@ -21,10 +18,3 @@ def load_env_file(path: Path = ROOT / ".env") -> None:
             continue
         key, value = line.split("=", 1)
         os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
-
-
-def kokoro_device(value: str | None = None) -> str:
-    device = (value or os.environ.get("KOKORO_DEVICE") or "cuda").strip().lower()
-    if device not in ("cuda", "cpu", "auto"):
-        raise ValueError("KOKORO_DEVICE must be cuda, cpu, or auto.")
-    return device
