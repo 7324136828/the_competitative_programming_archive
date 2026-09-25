@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Search, ChevronLeft, ChevronRight, Filter, Globe, CheckCircle2, BookOpen } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Filter, Globe, CheckCircle2, BookOpen, Plus } from 'lucide-react';
 import { fetchProblems, generateProblemTags } from '../services/api';
 import { useLLMModel } from './LLMModel';
 
-export default function ProblemList({ onSelectProblem, onOpenStory }) {
+export default function ProblemList({ onSelectProblem, onOpenStory, onCreateStory, refreshKey = 0 }) {
   const [problems, setProblems] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -15,6 +15,7 @@ export default function ProblemList({ onSelectProblem, onOpenStory }) {
   const [loading, setLoading] = useState(false);
   const [pageInput, setPageInput] = useState('1');
   const [taggingIds, setTaggingIds] = useState(() => new Set());
+  const [creatingStoryIds, setCreatingStoryIds] = useState(() => new Set());
   const requestedTagIds = useRef(new Set());
   const { model, ready: modelReady } = useLLMModel();
 
@@ -43,7 +44,7 @@ export default function ProblemList({ onSelectProblem, onOpenStory }) {
 
   useEffect(() => {
     loadProblems();
-  }, [page, language, difficulty, includeSolved]);
+  }, [page, language, difficulty, includeSolved, refreshKey]);
 
   useEffect(() => {
     setPageInput(String(page));
@@ -113,6 +114,28 @@ export default function ProblemList({ onSelectProblem, onOpenStory }) {
       setPageInput(String(requestedPage));
     } else {
       setPageInput('0');
+    }
+  };
+
+  const handleCreateStory = async (problem) => {
+    setCreatingStoryIds(current => new Set([...current, problem.id]));
+    try {
+      const story = await onCreateStory?.(problem.id);
+      if (!story) return;
+      setProblems(current => current.map(item => (
+        item.id === problem.id
+          ? { ...item, story, story_id: story.id, story_key: story.key }
+          : item
+      )));
+      onOpenStory?.(story.id);
+    } catch (error) {
+      window.alert(error.message || 'Unable to create a story for this problem.');
+    } finally {
+      setCreatingStoryIds(current => {
+        const next = new Set(current);
+        next.delete(problem.id);
+        return next;
+      });
     }
   };
 
@@ -243,7 +266,7 @@ export default function ProblemList({ onSelectProblem, onOpenStory }) {
               <th style={{ padding: '0.75rem 1rem', width: '160px' }}>Tag</th>
               <th style={{ padding: '0.75rem 1rem', width: '100px' }}>Language</th>
               <th style={{ padding: '0.75rem 1rem', width: '120px' }}>Testcases</th>
-              <th style={{ padding: '0.75rem 1rem', width: '120px' }}>Story</th>
+              <th style={{ padding: '0.75rem 1rem', width: '170px' }}>Story</th>
               <th style={{ padding: '0.75rem 1rem', width: '100px', textAlign: 'right' }}>Action</th>
             </tr>
           </thead>
@@ -334,9 +357,22 @@ export default function ProblemList({ onSelectProblem, onOpenStory }) {
                           style={{ fontSize: '0.72rem', padding: '0.3rem 0.55rem', display: 'inline-flex', gap: '0.3rem', alignItems: 'center' }}
                           title={`Open linked story ${p.story_key}`}
                         >
-                          <BookOpen size={13} /> {p.story_key}
+                          <BookOpen size={13} /> Navigate to story
                         </button>
-                      ) : <span style={{ color: '#777', fontSize: '0.75rem' }}>Not linked</span>}
+                      ) : (
+                        <button
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleCreateStory(p);
+                          }}
+                          disabled={creatingStoryIds.has(p.id)}
+                          className="btn btn-secondary"
+                          style={{ fontSize: '0.72rem', padding: '0.3rem 0.55rem', display: 'inline-flex', gap: '0.3rem', alignItems: 'center' }}
+                          title="Create a story linked to this problem"
+                        >
+                          <Plus size={13} /> {creatingStoryIds.has(p.id) ? 'Creating…' : 'Create a story'}
+                        </button>
+                      )}
                     </td>
 
                     <td style={{ padding: '0.85rem 1rem', textAlign: 'right' }}>

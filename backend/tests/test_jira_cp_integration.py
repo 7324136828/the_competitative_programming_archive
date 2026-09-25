@@ -1,5 +1,5 @@
 """Tests for Jira and Competitive Programming Archive integration:
-- Every problem is a story (with story_type: coding, learning, non-coding)
+- Coding stories link to archive problems; imported problems may remain unlinked
 - Problem sets are attributed to features
 - Set of problem sets are epics (user-created)
 - Coding story status depends completely on submission status and test results
@@ -67,7 +67,7 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         self.assertEqual(feature['parent_id'], epic_id)
         feat_id = feature['id']
 
-        # 3. Stories: every problem is a story (with coding, learning, or non-coding types)
+        # 3. Stories support coding, learning, and non-coding activity types.
         # 3a. Coding story
         coding_story = self.client.post('/api/issues', headers={'x-user-id': 'u_alex'}, json={
             'projectId': 'proj_cp',
@@ -157,6 +157,36 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         self.assertEqual(accepted_res.status_code, 200)
         self.assertEqual(accepted_res.json()['status'], 'Done')
         self.assertEqual(accepted_res.json()['submission_status'], 'Accepted')
+
+    def test_problem_import_defers_story_creation_until_requested(self):
+        upload = self.client.post('/api/problems/upload', json={
+            'problems': [{
+                'title': 'Deferred Story Problem',
+                'problem_statements': 'Import this problem without creating a story.',
+                'difficulty': 'Easy',
+            }],
+        })
+        self.assertEqual(upload.status_code, 200, upload.text)
+        self.assertEqual(upload.json()['insertedCount'], 1)
+
+        problems = self.client.get('/api/problems?search=Deferred+Story+Problem').json()['problems']
+        self.assertEqual(len(problems), 1)
+        problem = problems[0]
+        self.assertIsNone(problem['story_id'])
+        self.assertEqual(self.client.get(f"/api/issues/by-problem/{problem['id']}").status_code, 404)
+
+        created = self.client.post(
+            f"/api/issues/from-problem/{problem['id']}",
+            headers={'x-user-id': 'u_alex'},
+            json={'projectId': 'proj_cp'},
+        )
+        self.assertEqual(created.status_code, 201, created.text)
+        story = created.json()
+        self.assertEqual(story['problem_id'], problem['id'])
+
+        linked_problem = self.client.get(f"/api/problems/{problem['id']}").json()['problem']
+        self.assertEqual(linked_problem['story_id'], story['id'])
+        self.assertEqual(linked_problem['story_key'], story['key'])
 
     def test_import_stories_creates_features_and_epics(self):
         payload = {

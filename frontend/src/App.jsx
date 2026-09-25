@@ -58,6 +58,7 @@ const MainApp = () => {
     closeImportStories,
     isAiStoryOpen,
     closeAiStory,
+    refreshKey,
     triggerRefresh,
   } = useProject();
 
@@ -99,17 +100,8 @@ const MainApp = () => {
       const res = await fetchProblem(problemId);
       if (res.success && res.problem) {
         const p = res.problem;
-        let linkedStory = null;
         if (p.story_id) {
-          linkedStory = await api.getIssue(p.story_id);
-        } else if (currentProject?.id) {
-          try {
-            linkedStory = await api.ensureStoryForProblem(p.id, currentProject.id);
-          } catch (linkError) {
-            console.warn('Unable to establish problem/story link:', linkError);
-          }
-        }
-        if (linkedStory) {
+          const linkedStory = await api.getIssue(p.story_id);
           openActivity(linkedStory);
           return;
         }
@@ -138,6 +130,15 @@ const MainApp = () => {
     } catch (err) {
       console.error('Failed to load problem for activity screen:', err);
     }
+  };
+
+  const handleCreateStoryForProblem = async (problemId) => {
+    if (!currentProject?.id) {
+      throw new Error('Create or select a project before creating a story.');
+    }
+    const story = await api.ensureStoryForProblem(problemId, currentProject.id);
+    triggerRefresh();
+    return story;
   };
 
   const handleActivityStatusUpdated = (_issueId, _newStatus) => {
@@ -172,6 +173,8 @@ const MainApp = () => {
               <ProblemList
                 onSelectProblem={handleSelectProblemFromList}
                 onOpenStory={openIssueDetail}
+                onCreateStory={handleCreateStoryForProblem}
+                refreshKey={refreshKey}
               />
             </div>
           )}
@@ -202,6 +205,11 @@ const MainApp = () => {
           onOpenStory={(issueId) => {
             closeActivity();
             openIssueDetail(issueId);
+          }}
+          onCreateStory={async (problemId) => {
+            const story = await handleCreateStoryForProblem(problemId);
+            closeActivity();
+            openIssueDetail(story.id);
           }}
           onStatusUpdated={handleActivityStatusUpdated}
         />

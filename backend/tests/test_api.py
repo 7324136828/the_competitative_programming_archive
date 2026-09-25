@@ -85,14 +85,22 @@ class APITestCase(unittest.TestCase):
                 self.assertEqual(body["languages"], available)
 
     def test_json_import_accepts_array_envelope_and_single_problem(self):
-        for payload in ([problem("Array")], {"problems": [problem("Envelope")]}, problem("Single")):
+        for payload in (
+            [problem("Array")],
+            {"problems": [problem("Envelope")]},
+            {"stories": [problem("Story envelope")]},
+            problem("Single"),
+        ):
             with self.subTest(payload=payload):
                 body = self.assert_success(self.client.post("/api/problems/upload", json=payload))
                 self.assertEqual(body["insertedCount"], 1)
-        self.assertEqual(self.database.count(), 3)
+        self.assertEqual(self.database.count(), 4)
         restarted = create_app(self.config).test_client()
         body = self.assert_success(restarted.get("/api/problems"))
-        self.assertEqual([entry["title"] for entry in body["problems"]], ["Array", "Envelope", "Single"])
+        self.assertEqual(
+            [entry["title"] for entry in body["problems"]],
+            ["Array", "Envelope", "Story envelope", "Single"],
+        )
 
     def test_multipart_import_preserves_unicode_and_decodes_legacy_arrays(self):
         record = problem("Сумма", language="ru")

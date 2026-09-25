@@ -37,6 +37,7 @@ interface ActivityScreenProps {
   issue: Issue | null;
   onClose: () => void;
   onOpenStory?: (issueId: string) => void;
+  onCreateStory?: (problemId: number) => Promise<void>;
   onStatusUpdated?: (issueId: string, newStatus: string) => void;
 }
 
@@ -44,12 +45,19 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
   issue,
   onClose,
   onOpenStory,
+  onCreateStory,
   onStatusUpdated,
 }) => {
   const [currentStatus, setCurrentStatus] = useState<string>(issue?.status || 'To Do');
+  const [isCreatingStory, setIsCreatingStory] = useState(false);
+  const [storyError, setStoryError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (issue) setCurrentStatus(issue.status);
+    if (issue) {
+      setCurrentStatus(issue.status);
+      setIsCreatingStory(false);
+      setStoryError(null);
+    }
   }, [issue?.id, issue?.status]);
 
   // Keyboard shortcut to close (Escape)
@@ -73,8 +81,20 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
     onStatusUpdated?.(issue.id, newStatus);
   };
 
+  const handleCreateStory = async () => {
+    if (!issue.problem_id || !onCreateStory) return;
+    setIsCreatingStory(true);
+    setStoryError(null);
+    try {
+      await onCreateStory(issue.problem_id);
+    } catch (error) {
+      setStoryError(error instanceof Error ? error.message : 'Unable to create a story for this problem.');
+      setIsCreatingStory(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-[#141416] text-white animate-in fade-in duration-150">
+    <div data-testid="activity-screen" className="fixed inset-0 z-50 flex flex-col bg-[#141416] text-white animate-in fade-in duration-150">
       {/* Activity Screen Top Navigation Bar */}
       <header className="h-14 px-4 bg-[#1f1f23] border-b border-[#2e2e33] flex items-center justify-between shrink-0 select-none z-30">
         <div className="flex items-center space-x-3 overflow-hidden">
@@ -126,6 +146,19 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
               <span>Navigate to story</span>
             </button>
           )}
+          {onCreateStory && issue.problem_id && String(issue.id).startsWith('problem-') && (
+            <button
+              type="button"
+              onClick={handleCreateStory}
+              disabled={isCreatingStory}
+              className="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:opacity-60 disabled:cursor-wait text-white text-xs font-semibold transition"
+              title="Create a story linked to this problem"
+            >
+              <BookOpen className="w-3.5 h-3.5" />
+              <span>{isCreatingStory ? 'Creating…' : 'Create a story'}</span>
+            </button>
+          )}
+          {storyError && <span className="text-xs text-red-300" role="alert">{storyError}</span>}
 
           {/* Story Type Badge */}
           {storyType === 'coding' && (

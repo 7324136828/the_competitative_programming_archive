@@ -245,11 +245,11 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
           <span>Create</span>
         </button>
 
-        {/* Import Stories Button */}
+        {/* Import Problems Button */}
         <button
           onClick={openImportStories}
           className="flex items-center space-x-1 px-2.5 py-1.5 rounded text-xs font-semibold bg-white hover:bg-gray-100 border border-gray-300 text-gray-700 shadow-xs transition"
-          title="Import problem sets into Epics and Features"
+          title="Import problems without creating stories"
         >
           <Upload className="w-3.5 h-3.5 text-blue-600" />
           <span className="hidden md:inline">Import</span>

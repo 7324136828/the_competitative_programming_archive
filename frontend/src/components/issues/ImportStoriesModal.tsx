@@ -15,10 +15,7 @@ interface ImportStoriesModalProps {
 }
 
 export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, onClose }) => {
-  const { currentProject, projects, triggerRefresh } = useProject();
-  const [projectId, setProjectId] = useState<string>(currentProject?.id || projects[0]?.id || '');
-  const [epicName, setEpicName] = useState('Competitive Programming Mastery');
-  const [featureName, setFeatureName] = useState('Core Algorithms');
+  const { triggerRefresh } = useProject();
   const [jsonText, setJsonText] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [fileName, setFileName] = useState<string | null>(null);
@@ -57,10 +54,7 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
     try {
       let res: any;
       if (selectedFile) {
-        res = await api.importStoriesFile(selectedFile, {
-          projectId,
-          epicName: epicName.trim() || undefined,
-          featureName: featureName.trim() || undefined,
+        res = await api.importProblemsFile(selectedFile, {
           onProgress: setUploadProgress,
           onProcessing: () => {
             setUploadProgress(100);
@@ -74,18 +68,14 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
         } catch (err: any) {
           throw new Error(`JSON Parse Error: ${err.message}`);
         }
-        const payload = Array.isArray(parsedData) ? {
-          projectId,
-          epicName: epicName.trim() || undefined,
-          featureName: featureName.trim() || undefined,
-          stories: parsedData,
-        } : {
-          projectId: parsedData.projectId || projectId,
-          epicName: parsedData.epicName || epicName.trim() || undefined,
-          featureName: parsedData.featureName || featureName.trim() || undefined,
-          stories: parsedData.stories || parsedData.problems || [parsedData],
-        };
-        res = await api.importStories(payload);
+        const payload = Array.isArray(parsedData)
+          ? parsedData
+          : parsedData.problems
+            ? parsedData
+            : parsedData.stories
+              ? { problems: parsedData.stories }
+              : parsedData;
+        res = await api.importProblems(payload);
       }
       setSuccessResult(res);
       triggerRefresh();
@@ -117,8 +107,8 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
               <Upload className="w-5 h-5" />
             </span>
             <div>
-              <h2 className="font-bold text-base text-[#172B4D]">Import Stories & Problem Sets</h2>
-              <p className="text-xs text-gray-500">Maps problem sets to Features and sets of problem sets to Epics</p>
+              <h2 className="font-bold text-base text-[#172B4D]">Import Problems</h2>
+              <p className="text-xs text-gray-500">Adds problems to the archive without creating stories</p>
             </div>
           </div>
           <button disabled={isSubmitting} onClick={onClose} className="text-gray-400 hover:text-gray-600 disabled:opacity-40 p-1 rounded-md">
@@ -140,9 +130,8 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
               <CheckCircle2 className="w-12 h-12 text-emerald-600 mx-auto" />
               <h3 className="text-base font-bold text-emerald-900">Import Successful!</h3>
               <p className="text-xs text-emerald-800">
-                Created <strong>{successResult.stories_created ?? successResult.imported ?? 0}</strong> Stories,{' '}
-                <strong>{successResult.features_created ?? successResult.features ?? 0}</strong> Features, and{' '}
-                <strong>{successResult.epics_created ?? 0}</strong> Epics.
+                Imported <strong>{successResult.insertedCount ?? 0}</strong> problems.{' '}
+                The archive now contains <strong>{successResult.totalNow ?? 0}</strong> problems.
               </p>
               <div className="pt-2 flex justify-center space-x-3">
                 <button
@@ -155,57 +144,12 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
                   onClick={onClose}
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-semibold"
                 >
-                  View in Board
+                  Done
                 </button>
               </div>
             </div>
           ) : (
             <form onSubmit={handleImport} className="space-y-4">
-              {/* Target Project */}
-              <div>
-                <label className="block font-semibold text-gray-700 mb-1">Target Project *</label>
-                <select
-                  value={projectId}
-                  onChange={e => setProjectId(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-50 border border-gray-300 rounded-md text-gray-800 text-xs focus:ring-2 focus:ring-blue-500 outline-none"
-                >
-                  {projects.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} ({p.key})</option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Hierarchy Configuration */}
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-semibold text-gray-700 mb-1">
-                    Epic (Set of Problem Sets)
-                  </label>
-                  <input
-                    type="text"
-                    value={epicName}
-                    onChange={e => setEpicName(e.target.value)}
-                    placeholder="e.g. LeetCode 75, Advanced Graph Curriculum"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-800 text-xs focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                  <span className="text-[10px] text-gray-500">Groups related problem set features together</span>
-                </div>
-
-                <div>
-                  <label className="block font-semibold text-gray-700 mb-1">
-                    Feature (Problem Set)
-                  </label>
-                  <input
-                    type="text"
-                    value={featureName}
-                    onChange={e => setFeatureName(e.target.value)}
-                    placeholder="e.g. Dynamic Programming, Two Pointers"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-gray-800 text-xs focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                  <span className="text-[10px] text-gray-500">Default feature category for these stories</span>
-                </div>
-              </div>
-
               {/* Upload Dropzone */}
               <div>
                 <label className="block font-semibold text-gray-700 mb-1">JSON File Upload</label>
@@ -223,7 +167,7 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
                   <p className="text-[11px] text-gray-500 mt-1">
                     {selectedFile
                       ? `${(selectedFile.size / (1024 * 1024)).toFixed(1)} MiB · uploads directly without loading into the editor`
-                      : 'Accepts standard problem archive JSON or Jira story arrays'}
+                      : 'Accepts standard problem archive JSON or problem arrays'}
                   </p>
                 </div>
               </div>
@@ -231,7 +175,7 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
               {isSubmitting && selectedFile && (
                 <div className="space-y-1" aria-live="polite">
                   <div className="flex justify-between text-[11px] text-gray-600">
-                    <span>{isProcessing ? 'Processing stories on the server…' : 'Uploading dataset…'}</span>
+                    <span>{isProcessing ? 'Processing problems on the server…' : 'Uploading dataset…'}</span>
                     <span>{uploadProgress ?? 0}%</span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-gray-200">
@@ -250,6 +194,7 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
               <div>
                 <label className="block font-semibold text-gray-700 mb-1">Or Paste JSON Data</label>
                 <textarea
+                  aria-label="Or Paste JSON Data"
                   rows={6}
                   value={jsonText}
                   onChange={e => {
@@ -281,7 +226,7 @@ export const ImportStoriesModal: React.FC<ImportStoriesModalProps> = ({ isOpen, 
                   className="px-5 py-2 bg-[#0052CC] hover:bg-blue-700 disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center space-x-2 transition shadow-xs"
                 >
                   {isSubmitting && <RefreshCw className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{isSubmitting ? (isProcessing ? 'Processing Stories…' : 'Uploading…') : 'Import Stories'}</span>
+                  <span>{isSubmitting ? (isProcessing ? 'Processing Problems…' : 'Uploading…') : 'Import Problems'}</span>
                 </button>
               </div>
             </form>

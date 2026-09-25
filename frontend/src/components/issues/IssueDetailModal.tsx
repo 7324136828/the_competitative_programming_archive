@@ -383,7 +383,11 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
               <Trash2 className="w-4 h-4" />
             </button>
 
-            <button onClick={closeIssueDetail} className="p-1 text-gray-400 hover:text-gray-600 rounded">
+            <button
+              onClick={closeIssueDetail}
+              aria-label="Close"
+              className="p-1 text-gray-400 hover:text-gray-600 rounded"
+            >
               <X className="w-5 h-5" />
             </button>
           </div>

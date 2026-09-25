@@ -49,6 +49,11 @@ type StoryImportUploadOptions = {
   onProcessing?: () => void;
 };
 
+type ProblemImportUploadOptions = {
+  onProgress?: (percent: number) => void;
+  onProcessing?: () => void;
+};
+
 export function uploadStoriesFile(file: File, options: StoryImportUploadOptions): Promise<any> {
   return new Promise((resolve, reject) => {
     const formData = new FormData();
@@ -82,6 +87,42 @@ export function uploadStoriesFile(file: File, options: StoryImportUploadOptions)
       const fallback = request.status === 413
         ? 'This dataset exceeds the server upload size limit.'
         : `Import failed (HTTP ${request.status || 'unknown'}).`;
+      reject(new Error(data?.error || fallback));
+    };
+    request.send(formData);
+  });
+}
+
+export function uploadProblemsFile(file: File, options: ProblemImportUploadOptions = {}): Promise<any> {
+  return new Promise((resolve, reject) => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const request = new XMLHttpRequest();
+    request.open('POST', `${API_BASE}/problems/upload`);
+    request.setRequestHeader('x-user-id', getActiveUserId());
+    request.upload.onprogress = event => {
+      if (event.lengthComputable) {
+        options.onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      }
+    };
+    request.upload.onload = () => options.onProcessing?.();
+    request.onerror = () => reject(new Error('The problem upload failed. Check the server connection and try again.'));
+    request.onabort = () => reject(new Error('The import was cancelled.'));
+    request.onload = () => {
+      let data: any = null;
+      try {
+        data = JSON.parse(request.responseText);
+      } catch (_error) {
+        // The status-specific fallback below is clearer than a JSON parse failure.
+      }
+      if (request.status >= 200 && request.status < 300 && data?.success) {
+        resolve(data);
+        return;
+      }
+      const fallback = request.status === 413
+        ? 'This dataset exceeds the server upload size limit.'
+        : `Problem import failed (HTTP ${request.status || 'unknown'}).`;
       reject(new Error(data?.error || fallback));
     };
     request.send(formData);
@@ -266,6 +307,10 @@ export const api = {
     apiRequest('/admin/purge', { method: 'POST', body: JSON.stringify({ confirmation }) }),
 
   // Stories & CP integration
+  importProblems: (data: any) =>
+    apiRequest('/problems/upload', { method: 'POST', body: JSON.stringify(data) }),
+  importProblemsFile: (file: File, options?: ProblemImportUploadOptions) =>
+    uploadProblemsFile(file, options),
   importStories: (data: any) =>
     apiRequest('/issues/import-stories', { method: 'POST', body: JSON.stringify(data) }),
   importStoriesFile: (file: File, options: StoryImportUploadOptions) =>

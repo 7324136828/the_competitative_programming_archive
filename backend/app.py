@@ -168,40 +168,6 @@ def create_app(config: dict | None = None) -> Flask:
             raise NotFound("Problem not found.")
         return problem
 
-    def ensure_problem_story(problem: dict) -> dict | None:
-        """Keep archive creation and story creation linked in the unified app."""
-        try:
-            from .jira.db import db as jira_database
-            from .jira.services.issues import ensure_story_for_problem
-            if (
-                jira_database.path == ':memory:'
-                or Path(jira_database.path).resolve() != database.path.resolve()
-            ):
-                return None
-            return ensure_story_for_problem(problem["id"])
-        except Exception as error:
-            # Standalone Flask tests intentionally do not initialize the Jira
-            # schema. In the unified server a missing link is an actual error.
-            if "no such table" in str(error).lower() or "project is required" in str(error).lower():
-                return None
-            raise
-
-    def backfill_problem_stories() -> int:
-        """Link imported problems only when this Flask app shares Jira's database."""
-        try:
-            from .jira.db import db as jira_database
-            from .jira.services.issues import backfill_archive_story_links
-            if (
-                jira_database.path == ':memory:'
-                or Path(jira_database.path).resolve() != database.path.resolve()
-            ):
-                return 0
-            return backfill_archive_story_links()
-        except Exception as error:
-            if "no such table" in str(error).lower() or "project is required" in str(error).lower():
-                return 0
-            raise
-
     # CORS support
     @app.after_request
     def add_cors_headers(response):
@@ -356,9 +322,8 @@ def create_app(config: dict | None = None) -> Flask:
         problem = normalize_problem(json_object(), require_content=True)
         with mutation_lock:
             created = database.create_problem(problem)
-            story = ensure_problem_story(created)
-        return jsonify(success=True, problem=database.get_problem(created["id"]), story=story,
-                       message="Problem and linked story successfully saved to database!")
+        return jsonify(success=True, problem=database.get_problem(created["id"]),
+                       message="Problem successfully saved to database!")
 
     @app.post("/api/problems/upload")
     def upload_problems():
@@ -373,7 +338,7 @@ def create_app(config: dict | None = None) -> Flask:
         if isinstance(parsed, list):
             raw_problems = parsed
         elif isinstance(parsed, dict):
-            raw_problems = parsed.get("problems", [parsed] if parsed.get("title") else [])
+            raw_problems = parsed.get("problems") or parsed.get("stories") or ([parsed] if parsed.get("title") else [])
         else:
             raw_problems = None
         if not isinstance(raw_problems, list) or not raw_problems:
@@ -393,18 +358,14 @@ def create_app(config: dict | None = None) -> Flask:
         with mutation_lock:
             backend_logger.info('Problem archive writing %d entries to SQLite', len(problems))
             inserted = database.bulk_insert(problems)
-            backend_logger.info('Problem archive linking imported problems to stories')
-            linked_stories = backfill_problem_stories()
             total = database.count()
         backend_logger.info(
-            'Problem archive import complete: %d inserted, %d stories linked',
+            'Problem archive import complete: %d inserted',
             inserted,
-            linked_stories,
         )
         return jsonify(
             success=True,
             insertedCount=inserted,
-            linkedStories=linked_stories,
             totalNow=total,
             message=f"Successfully imported and persisted {inserted} problems to the database!",
         )
@@ -618,7 +579,6 @@ def create_app(config: dict | None = None) -> Flask:
         if auto_save:
             with mutation_lock:
                 saved = database.create_problem(normalize_problem(generated))
-                ensure_problem_story(saved)
                 saved = database.get_problem(saved["id"])
         return jsonify(
             success=True,
@@ -724,19 +684,18 @@ def create_unified_app(flask_config: dict | None = None):
         seed_database(flask_app.extensions["database"], flask_app.config["SEED_PATH"])
     flask_app.config["AUTO_SEED"] = auto_seed
     initialize_jira_data()
-    if requested_config.get("BACKFILL_PROBLEM_STORIES", True):
-        from .jira.services.issues import (
-            backfill_archive_story_links,
-            backfill_coding_story_problem_links,
-        )
-        linked_problems = backfill_coding_story_problem_links()
+    from .jira.services.issues import backfill_coding_story_problem_links
+    linked_problems = backfill_coding_story_problem_links()
+    linked_stories = 0
+    if requested_config.get("BACKFILL_PROBLEM_STORIES", False):
+        from .jira.services.issues import backfill_archive_story_links
         linked_stories = backfill_archive_story_links()
-        if linked_problems or linked_stories:
-            print(
-                "Unified database repaired missing links: "
-                f"{linked_problems} coding story problem(s), "
-                f"{linked_stories} archive problem story/stories."
-            )
+    if linked_problems or linked_stories:
+        print(
+            "Unified database repaired missing links: "
+            f"{linked_problems} coding story problem(s), "
+            f"{linked_stories} archive problem story/stories."
+        )
 
     jira_app.state.archive_database = flask_app.extensions["database"]
     jira_app.state.archive_mutation_lock = flask_app.extensions["mutation_lock"]
