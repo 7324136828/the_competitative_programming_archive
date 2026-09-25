@@ -119,12 +119,8 @@ def create_app(config: dict | None = None) -> Flask:
         SUBMISSION_WORKERS=2,
         SUBMISSION_MAX_PENDING=16,
         WORKSPACE_STORAGE_DIR=os.environ.get("WORKSPACE_STORAGE_DIR") or None,
-        KOKORO_BASE_URL=os.environ.get("KOKORO_BASE_URL", "http://127.0.0.1:8880"),
-        KOKORO_MODEL=os.environ.get("KOKORO_MODEL", "kokoro"),
-        KOKORO_VOICE=os.environ.get("KOKORO_VOICE", ""),
-        KOKORO_LANGUAGE=os.environ.get("KOKORO_LANGUAGE", "auto"),
-        KOKORO_SPEED=os.environ.get("KOKORO_SPEED", "1.0"),
-        KOKORO_TIMEOUT_SECONDS=os.environ.get("KOKORO_TIMEOUT_SECONDS", "180"),
+        CONNECTOR_BASE_URL=os.environ.get("CONNECTOR_BASE_URL", "http://127.0.0.1:8301/v1"),
+        CONNECTOR_SPEECH_TIMEOUT_SECONDS=os.environ.get("CONNECTOR_SPEECH_TIMEOUT_SECONDS", "180"),
     )
     if config:
         app.config.update(config)
@@ -146,12 +142,8 @@ def create_app(config: dict | None = None) -> Flask:
     drafts = DraftStore(database, storage_root / "drafts")
     audio = AudioStore(
         storage_root / "audio",
-        base_url=app.config["KOKORO_BASE_URL"],
-        model=app.config["KOKORO_MODEL"],
-        voice=app.config["KOKORO_VOICE"],
-        language=app.config["KOKORO_LANGUAGE"],
-        speed=float(app.config["KOKORO_SPEED"]),
-        timeout_seconds=float(app.config["KOKORO_TIMEOUT_SECONDS"]),
+        base_url=app.config["CONNECTOR_BASE_URL"],
+        timeout_seconds=float(app.config["CONNECTOR_SPEECH_TIMEOUT_SECONDS"]),
     )
     app.extensions["draft_store"] = drafts
     app.extensions["audio_store"] = audio

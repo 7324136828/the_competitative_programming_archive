@@ -1,4 +1,4 @@
-"""Narration queue, cache and Kokoro HTTP/MP3 boundary regressions."""
+"""Narration queue, cache and Connector speech/MP3 boundary regressions."""
 
 from __future__ import annotations
 
@@ -45,10 +45,8 @@ class AudioStoreTests(unittest.TestCase):
         def slow_service(payload):
             entered.set()
             self.assertTrue(release.wait(5))
-            self.assertEqual(payload["response_format"], "wav")
-            self.assertEqual(payload["language"], "a")
-            self.assertEqual(payload["voice"], "af_heart")
-            self.assertIn("Add two numbers", payload["input"])
+            self.assertEqual(list(payload), ["content"])
+            self.assertIn("Add two numbers", payload["content"])
             return example_wav()
 
         self.addCleanup(release.set)
@@ -76,23 +74,23 @@ class AudioStoreTests(unittest.TestCase):
             self.assertEqual(restarted.start(PROBLEM), complete)
         service.assert_not_called()
 
-    def test_content_voice_model_and_speed_changes_invalidate_cache(self):
+    def test_content_endpoint_and_source_language_changes_invalidate_cache(self):
         original = self.audio.get(PROBLEM)["key"]
         for field, value in (("title", "Another title"), ("problem_statements", "Print the product.")):
             self.assertNotEqual(self.audio.get({**PROBLEM, field: value})["key"], original)
-        for settings in ({"voice": "af_bella"}, {"model": "new-kokoro"}, {"speed": 1.2}):
-            configured = AudioStore(self.root, **settings)
-            self.addCleanup(configured.shutdown)
-            self.assertNotEqual(configured.get(PROBLEM)["key"], original)
+        self.assertNotEqual(self.audio.get({**PROBLEM, "language": "fr"})["key"], original)
+        configured = AudioStore(self.root, base_url="http://127.0.0.1:8401/v1")
+        self.addCleanup(configured.shutdown)
+        self.assertNotEqual(configured.get(PROBLEM)["key"], original)
 
     def test_response_narration_persists_and_can_be_polled_by_key(self):
         response = '## Explanation\nThe bound is $4 \\le N \\le 1000$.\n```json\n{"answer": 42}\n```'
         entered, release = threading.Event(), threading.Event()
 
         def service(payload):
-            self.assertIn("less than or equal to", payload["input"])
-            self.assertIn('"answer": 42', payload["input"])
-            self.assertNotIn("```", payload["input"])
+            self.assertIn("less than or equal to", payload["content"])
+            self.assertIn('"answer": 42', payload["content"])
+            self.assertNotIn("```", payload["content"])
             entered.set()
             self.assertTrue(release.wait(5))
             return example_wav()
@@ -119,7 +117,7 @@ class AudioStoreTests(unittest.TestCase):
         for value in (None, 4, {}, [], "", "  ", "a" * (MAX_TEXT_CHARS + 1)):
             with self.subTest(value_type=type(value).__name__), self.assertRaises(ValueError):
                 self.audio.start_text(value)
-        for language in (None, {}, "", "de", "x" * 31):
+        for language in (None, {}, "", "x" * 31):
             with self.subTest(language=language), self.assertRaises(ValueError):
                 self.audio.get_text("Hello", language)
         for key in (None, "../outside", "a" * 63, "A" * 64):
@@ -206,7 +204,7 @@ class AudioStoreTests(unittest.TestCase):
         calls = []
 
         def slow_service(payload):
-            calls.append(payload["input"])
+            calls.append(payload["content"])
             if len(calls) == 1:
                 entered.set()
                 self.assertTrue(release.wait(5))
@@ -259,18 +257,10 @@ class AudioStoreTests(unittest.TestCase):
         for key in ("../secrets", "a" * 64 + "/../secret", "A" * 64, "a" * 63, None):
             self.assertIsNone(self.audio.path_for(key))
 
-    def test_language_matches_source_and_rejects_unsupported_languages(self):
-        _, generated = self.audio._request({**PROBLEM, "language": "ai"})
-        self.assertEqual(generated["language"], "a")
-        _, chinese = self.audio._request({**PROBLEM, "language": "zh-CN"})
-        self.assertEqual(chinese["language"], "z")
-        self.assertEqual(chinese["voice"], "zf_xiaobei")
-        with self.assertRaisesRegex(ValueError, "does not support"):
-            self.audio.start({**PROBLEM, "language": "de"})
-        configured = AudioStore(self.root, voice="af_heart")
-        self.addCleanup(configured.shutdown)
-        with self.assertRaisesRegex(ValueError, "voice does not match"):
-            configured.start({**PROBLEM, "language": "ja"})
+    def test_connector_owns_language_and_voice_configuration(self):
+        _, generated = self.audio._request({**PROBLEM, "language": "zh-CN"})
+        self.assertEqual(list(generated), ["content"])
+        self.assertIn("Add two numbers", generated["content"])
 
     def test_http_contract_requests_wav_and_encodes_only_valid_payloads(self):
         actual_client = httpx.Client
@@ -283,16 +273,22 @@ class AudioStoreTests(unittest.TestCase):
         with patch("backend.audio.httpx.Client", side_effect=lambda **kwargs: actual_client(transport=httpx.MockTransport(service), **kwargs)):
             _, payload = self.audio._request(PROBLEM)
             self.assertEqual(self.audio._wav(payload), example_wav())
-        self.assertEqual(str(observed[0].url), "http://127.0.0.1:8880/v1/audio/speech")
-        self.assertEqual(json.loads(observed[0].content)["response_format"], "wav")
+        self.assertEqual(str(observed[0].url), "http://127.0.0.1:8301/api/speech")
+        self.assertEqual(json.loads(observed[0].content), {"content": narration_text(PROBLEM)})
 
     def test_service_http_error_is_bounded_and_actionable(self):
         actual_client = httpx.Client
         transport = httpx.MockTransport(lambda _: httpx.Response(500, content=b"private traceback" * 1000))
         with patch("backend.audio.httpx.Client", side_effect=lambda **kwargs: actual_client(transport=transport, **kwargs)):
-            with self.assertRaisesRegex(AudioError, "Kokoro returned HTTP 500") as error:
+            with self.assertRaisesRegex(AudioError, "Connector speech endpoint returned HTTP 500") as error:
                 self.audio._wav({})
         self.assertNotIn("private traceback", str(error.exception))
+
+        rejected = httpx.MockTransport(lambda _: httpx.Response(422, content=b"private validation detail"))
+        with patch("backend.audio.httpx.Client", side_effect=lambda **kwargs: actual_client(transport=rejected, **kwargs)):
+            with self.assertRaisesRegex(AudioError, "non-empty plain text") as error:
+                self.audio._wav({"content": ""})
+        self.assertNotIn("private validation detail", str(error.exception))
 
     def test_invalid_or_empty_audio_is_rejected(self):
         for invalid in (b"not audio", b"RIFF", b"<html>error</html>"):

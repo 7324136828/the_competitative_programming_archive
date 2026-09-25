@@ -30,13 +30,10 @@ that produced them, and switching models starts the progressive hints over.
 
 To access the workspace from another device on the same network, launch
 `run_lan.bat` and open one of the printed LAN URLs on that device. This wrapper
-runs `run.bat serve --lan` and forwards extra arguments, including
-`--frontend-port`, `--backend-port`, `--kokoro-backend-port`, and `--kokoro-device`.
-For example, `run_lan.bat --frontend-port 8080 --backend-port 8000 --kokoro-backend-port 8890`
-serves the UI on port 8080, sends its API requests to the backend on port 8000,
-and connects the backend to Kokoro on port 8890. Busy frontend/backend ports
-advance to the next free port; Kokoro uses its exact configured port. The
-launcher prints the actual URLs. You can also use
+runs `run.bat serve --lan` and forwards `--frontend-port` and `--backend-port`.
+For example, `run_lan.bat --frontend-port 8080 --backend-port 8000` serves the
+UI on port 8080 and sends its API requests to the backend on port 8000. Busy
+ports advance to the next free port. The launcher prints the actual URLs. You can also use
 `python run.py serve --lan` directly. The frontend listens on the network and
 proxies API and audio requests to the backend. All connected devices use this
 installation's shared problems, drafts, and submission history.
@@ -136,10 +133,10 @@ supported, together with `\(...\)` and `\[...\]`. JSON responses and JSON code
 blocks are indented for reading. Code samples retain their literal contents.
 
 Click **Read response aloud** below an AI reply or **Read hint aloud** below a
-thinking step to generate a saved Kokoro MP3. The player shows generation
-progress, offers playback controls and an MP3 download, and reuses the cached
-file for the same response and voice settings. Chat and hint narration use an
-English voice. Markdown is reduced to readable text before synthesis.
+thinking step to generate a saved MP3 through The Connector. The player shows
+generation progress, offers playback controls and an MP3 download, and reuses
+the cached file for the same response and Connector endpoint. Markdown is
+reduced to readable text before synthesis.
 
 Open **Settings → Clear saved audio** to remove cached problem and AI-response
 MP3s and see how much disk space they use. Clearing stops open players and
@@ -155,14 +152,13 @@ GET    /api/audio/cache                     saved file count and size
 DELETE /api/audio/cache                     clear saved audio
 ```
 
-## Problem narration with Kokoro
+## Problem narration through The Connector
 
 Click **Read problem aloud** in a saved problem to generate narration in the background
-and reveal an audio player. The backend asks the separate Kokoro service for
-WAV audio, encodes a real MP3 with LAME, and saves it to disk. Playback supports
-seeking and downloading the MP3. The same description and voice reuse the saved
-file after reloads and backend restarts; changing the description or speech
-settings produces a new file.
+and reveal an audio player. The backend calls The Connector's `POST /api/speech`
+skill for WAV audio, encodes a real MP3 with LAME, and saves it to disk. Playback
+supports seeking and downloading the MP3. The same description and Connector
+endpoint reuse the saved file after reloads and backend restarts.
 
 Install the updated backend dependencies with your project Python:
 
@@ -170,90 +166,23 @@ Install the updated backend dependencies with your project Python:
 .\.venv\Scripts\python.exe -m pip install -r backend/requirements.txt
 ```
 
-The supplied `python-kokoro/server.py` requires its own Python 3.12 environment.
-Its default service address is `http://127.0.0.1:8880`. Start it before requesting
-new narration. The frontend reports connection or generation errors and offers
-a retry; already cached MP3s remain available when Kokoro is stopped.
+Start The Connector before requesting new narration. It owns the private Kokoro
+service and exposes readiness at `GET /api/speech/health`. CodeJudge never calls
+Kokoro directly. The frontend reports Connector validation, availability, and
+generation errors and offers a retry; cached MP3s remain available while The
+Connector is stopped.
 
-The root launchers now prepare and start Kokoro with the rest of CodeJudge:
-
-```powershell
-.\setup.bat
-.\run.bat
-```
-
-`setup.py` always uses a separate Python 3.12 environment for speech, even when
-the main app runs under another Python version or an active Conda environment.
-It installs and checks the requested PyTorch device, backend, frontend, and
-browser-test dependencies. `run.py` waits for Kokoro's health check before
-starting the backend and frontend. It reuses a compatible service already
-running at `KOKORO_BASE_URL`; it stops only services it started when you exit.
-
-Choose the speech port with `run.bat --kokoro-backend-port 8890` (also supported
-by `run_lan.bat`, `python run.py`, and `./run.sh`). The flag accepts ports
-1–65535 and overrides only the port in `KOKORO_BASE_URL`, preserving its scheme,
-host, and path. The updated URL is passed to the application backend without
-changing `.env`. To persist it, set `KOKORO_BASE_URL=http://127.0.0.1:8890` in
-`.env`. A compatible service on that port is reused; an incompatible occupied
-port causes an error. With `--skip-kokoro`, the URL override still applies,
-but you start the speech service yourself.
-
-Use `python setup.py --kokoro-only` to prepare just the speech environment.
-Both root scripts support `--kokoro-device cpu` and `--skip-kokoro`.
-`KOKORO_DEVICE=cuda` is the default; terminal variables override `.env`, and the
-command-line device overrides both. On Linux/macOS, use the `.sh` wrappers and
-install `python3.12`; use CPU explicitly on a machine without CUDA.
-
-To manage only the Windows speech service independently, the dedicated scripts
-remain available:
-
-```powershell
-.\python-kokoro\setup.ps1 -Device cuda
-.\python-kokoro\run.ps1 -Device cuda
-```
-
-Kokoro runs as a standalone service using Python 3.12 from
-`python-kokoro/.venv/Scripts/python.exe`, independently of CodeJudge's Python
-environment. Setup and launch default to **CUDA**. Setup installs the pinned
-PyTorch CUDA 12.8 build from `requirements-cuda.txt`, then Kokoro, and verifies
-an actual GPU computation. The wheel comes from the
-[official PyTorch CUDA index](https://pytorch.org/get-started/previous-versions/).
-If Python 3.12 already has these dependencies, `setup.ps1 -ReuseSystemPackages`
-can reuse them. CUDA failures are reported rather than silently falling back
-to CPU. To explicitly use a CPU, pass `-Device cpu` to both scripts.
-
-If a service is already running on CPU, switch it with:
-
-```powershell
-.\python-kokoro\run.ps1 -Device cuda -Restart
-```
-
-The restart option only stops a process identified as this repository's Kokoro
-server. A normal launch checks the existing service's device and refuses to
-silently reuse a CPU service for a CUDA request. Inspect
-`http://127.0.0.1:8880/health` to see the interpreter, CUDA runtime, GPU, and loaded
-pipeline devices. The first narration may download speech-model and language data. The run
-script starts a hidden process, checks its health, and writes logs and its PID
-under `data/workspace/kokoro-service/`. Use `-Foreground` to run it in your
-terminal and stop it with Ctrl+C. These standalone scripts are optional when
-using the root setup and run commands.
-
-Optional settings in `.env` (restart CodeJudge after changing them):
+CodeJudge settings in `.env` (restart its backend after changing them):
 
 ```dotenv
 WORKSPACE_STORAGE_DIR=
-KOKORO_BASE_URL=http://127.0.0.1:8880
-KOKORO_DEVICE=cuda
-KOKORO_MODEL=kokoro
-KOKORO_LANGUAGE=auto
-KOKORO_VOICE=
-KOKORO_SPEED=1.0
-KOKORO_TIMEOUT_SECONDS=180
+CONNECTOR_BASE_URL=http://127.0.0.1:8301/v1
+CONNECTOR_SPEECH_TIMEOUT_SECONDS=180
 ```
 
-Automatic voice selection follows the problem's original language. English,
-Spanish, French, Hindi, Italian, Japanese, Portuguese, and Chinese are supported;
-Japanese and Chinese require the service's optional `misaki[ja]` and `misaki[zh]`
-dependencies. AI-generated English problems use the English voice. Set a voice
-and Kokoro language code only when they match the problem language. The player
-reads the original saved description, including its title.
+Configure voice, language, speed, model dependencies, and CPU/CUDA selection in
+The Connector, then restart The Connector. Its public speech contract accepts
+only `{ "content": "..." }`, so CodeJudge does not override those settings per
+request. Clear CodeJudge's saved audio after changing Connector speech settings
+if you want existing narration regenerated. The player reads the saved problem
+description, including its title.

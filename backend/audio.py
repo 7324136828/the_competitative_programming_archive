@@ -1,8 +1,9 @@
-"""Generate persistent MP3 narration through the isolated Kokoro HTTP service.
+"""Generate persistent MP3 narration through The Connector speech skill.
 
-The web process does not import Kokoro or download a speech model. Its one
-bounded worker requests 16-bit WAV from python-kokoro and encodes MP3 with LAME.
-Content-addressed files survive application restarts; unfinished jobs can retry.
+The web process does not import Kokoro or call its private service. Its one
+bounded worker requests 16-bit WAV from The Connector and encodes MP3 with
+LAME. Content-addressed files survive application restarts; unfinished jobs
+can retry.
 """
 
 from __future__ import annotations
@@ -13,14 +14,13 @@ from html import unescape
 import io
 import json
 import logging
-import math
 import os
 from pathlib import Path
 import re
 import stat
 import tempfile
 import threading
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 import wave
 
 import httpx
@@ -40,14 +40,6 @@ HTML_TAG_PATTERN = re.compile(
 )
 BLOCK_TAGS = {"p", "div", "br", "h1", "h2", "h3", "h4", "h5", "h6", "li", "ul", "ol",
               "pre", "table", "tr", "section", "article", "blockquote", "hr"}
-# Official Kokoro-82M voices: https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md
-LANGUAGES = {
-    "en": ("a", "af_heart"), "en-gb": ("b", "bf_emma"),
-    "es": ("e", "ef_dora"), "fr": ("f", "ff_siwis"),
-    "hi": ("h", "hf_alpha"), "it": ("i", "if_sara"),
-    "ja": ("j", "jf_alpha"), "pt": ("p", "pf_dora"),
-    "zh": ("z", "zf_xiaobei"),
-}
 
 
 class AudioError(RuntimeError):
@@ -155,24 +147,26 @@ def wav_to_mp3(data: bytes) -> bytes:
 
 class AudioStore:
     def __init__(
-        self, root: str | Path, *, base_url: str = "http://127.0.0.1:8880",
-        model: str = "kokoro", voice: str = "", language: str = "auto",
-        speed: float = 1.0, timeout_seconds: float = 180, max_pending: int = 4,
+        self, root: str | Path, *, base_url: str = "http://127.0.0.1:8301/v1",
+        timeout_seconds: float = 180, max_pending: int = 4,
     ):
         self.root = Path(root).expanduser().resolve()
         self.base_url = base_url.rstrip("/")
-        parsed = urlsplit(self.base_url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname or parsed.query or parsed.fragment:
-            raise ValueError("KOKORO_BASE_URL must be an HTTP service URL.")
-        self.speech_url = self.base_url + ("/audio/speech" if parsed.path.rstrip("/").endswith("/v1") else "/v1/audio/speech")
-        self.model, self.voice, self.language = model, voice.strip(), language.strip().lower()
-        self.speed, self.timeout_seconds = float(speed), float(timeout_seconds)
-        if not math.isfinite(self.speed) or not 0.5 <= self.speed <= 2.0:
-            raise ValueError("KOKORO_SPEED must be between 0.5 and 2.0.")
-        if not math.isfinite(self.timeout_seconds) or not 1 <= self.timeout_seconds <= 600:
-            raise ValueError("KOKORO_TIMEOUT_SECONDS must be between 1 and 600.")
-        if self.language != "auto" and self.language not in {item[0] for item in LANGUAGES.values()}:
-            raise ValueError("KOKORO_LANGUAGE must be auto or a supported Kokoro language code.")
+        try:
+            parsed = urlsplit(self.base_url)
+            parsed.port
+        except ValueError as error:
+            raise ValueError("CONNECTOR_BASE_URL contains an invalid port or address.") from error
+        if (parsed.scheme not in ("http", "https") or not parsed.hostname
+                or parsed.username or parsed.password or parsed.query or parsed.fragment):
+            raise ValueError("CONNECTOR_BASE_URL must be an HTTP service URL without credentials or a query.")
+        connector_path = parsed.path.rstrip("/")
+        if connector_path.endswith("/v1"):
+            connector_path = connector_path[:-3]
+        self.speech_url = urlunsplit((parsed.scheme, parsed.netloc, connector_path + "/api/speech", "", ""))
+        self.timeout_seconds = float(timeout_seconds)
+        if not 1 <= self.timeout_seconds <= 600:
+            raise ValueError("CONNECTOR_SPEECH_TIMEOUT_SECONDS must be between 1 and 600.")
         self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="narration")
         self._slots = threading.BoundedSemaphore(max(1, int(max_pending)))
         self._lock = threading.RLock()
@@ -182,30 +176,10 @@ class AudioStore:
         self._closed = False
 
     def _request(self, problem: dict) -> tuple[str, dict]:
-        source_language = str(problem.get("language") or "en").lower().replace("_", "-")
-        # Existing generated problems use "ai" as their source marker and are
-        # generated in English; it is not a Kokoro language code.
-        if source_language == "ai":
-            source_language = "en"
-        source_language = source_language if source_language in LANGUAGES else source_language.split("-")[0]
-        if source_language not in LANGUAGES:
-            raise ValueError(f"Kokoro narration does not support the problem language '{source_language}'.")
-        language, default_voice = LANGUAGES[source_language]
-        if self.language != "auto":
-            if self.language != language and not ({self.language, language} <= {"a", "b"}):
-                raise ValueError("The configured Kokoro language does not match this problem's language.")
-            language = self.language
-            default_voice = next(voice for code, voice in LANGUAGES.values() if code == language)
-        voice = self.voice or default_voice
-        if not voice.startswith(language):
-            raise ValueError("The configured Kokoro voice does not match this problem's language. Leave KOKORO_VOICE blank for automatic selection.")
-        request = {
-            "model": self.model, "input": narration_text(problem), "voice": voice,
-            "speed": self.speed, "language": language, "response_format": "wav",
-        }
+        request = {"content": narration_text(problem)}
         # Raw fields are included so any edited statement/title invalidates audio,
         # even if its normalized spoken representation happens to be identical.
-        identity = {"version": 1, "encoding": "mp3-lame-128-q2", "endpoint": self.speech_url,
+        identity = {"version": 2, "encoding": "mp3-lame-128-q2", "endpoint": self.speech_url,
                     "request": request, "title": problem.get("title"),
                     "statement": problem.get("problem_statements", problem.get("description")),
                     "sourceLanguage": problem.get("language")}
@@ -343,11 +317,18 @@ class AudioStore:
                         chunks.append(chunk)
                     return b"".join(chunks)
         except httpx.TimeoutException as error:
-            raise AudioError("Kokoro narration timed out. Retry when the speech model has finished loading.") from error
+            raise AudioError("The Connector speech request timed out. Retry when its speech model has finished loading.") from error
         except httpx.HTTPStatusError as error:
-            raise AudioError(f"Kokoro returned HTTP {error.response.status_code}. Check the speech service; Japanese and Chinese require misaki[ja] and misaki[zh].") from error
+            status = error.response.status_code
+            message = {
+                422: ("The Connector rejected this narration content. Use non-empty plain text "
+                      "or a JSON object with a non-empty string text field."),
+                502: "The Connector received an invalid response from its speech service. Check The Connector and retry.",
+                503: "The Connector speech service is unavailable. Start it in The Connector and retry.",
+            }.get(status, f"The Connector speech endpoint returned HTTP {status}. Check The Connector and retry.")
+            raise AudioError(message) from error
         except httpx.RequestError as error:
-            raise AudioError("Cannot reach Kokoro. Start python-kokoro/server.py with Python 3.12 and check KOKORO_BASE_URL.") from error
+            raise AudioError("Cannot reach The Connector speech endpoint. Start The Connector and check CONNECTOR_BASE_URL.") from error
 
     def _generate(self, key: str, payload: dict, epoch: int) -> None:
         temporary = None
