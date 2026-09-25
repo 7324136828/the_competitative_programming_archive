@@ -56,6 +56,36 @@ CREATE TABLE IF NOT EXISTS editor_drafts (
     PRIMARY KEY (problem_id, language),
     FOREIGN KEY(problem_id) REFERENCES problems(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS problem_translations (
+    problem_id INTEGER NOT NULL,
+    language TEXT NOT NULL,
+    title TEXT NOT NULL,
+    problem_statements TEXT NOT NULL,
+    hints TEXT NOT NULL DEFAULT '[]',
+    provider TEXT,
+    model TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (problem_id, language),
+    FOREIGN KEY(problem_id) REFERENCES problems(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS problem_solution_traces (
+    problem_id INTEGER NOT NULL,
+    hint_level INTEGER NOT NULL,
+    trace_json TEXT NOT NULL,
+    provider TEXT,
+    model TEXT,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (problem_id, hint_level),
+    FOREIGN KEY(problem_id) REFERENCES problems(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS problem_audio_assets (
+    problem_id INTEGER PRIMARY KEY,
+    cache_key TEXT,
+    url TEXT,
+    status TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(problem_id) REFERENCES problems(id) ON DELETE CASCADE
+);
 CREATE TABLE IF NOT EXISTS schema_migrations (
     name TEXT PRIMARY KEY,
     applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -227,9 +257,10 @@ class Database:
                 f"{PROBLEM_SELECT} {where} ORDER BY id ASC LIMIT ? OFFSET ?",
                 [*parameters, limit, offset],
             ).fetchall()
-
+            problems = [format_problem(row) for row in rows]
+            self._attach_story_links(connection, problems)
         return {
-            "problems": [format_problem(row) for row in rows],
+            "problems": problems,
             "total": total,
             "page": page,
             "limit": limit,
@@ -243,7 +274,91 @@ class Database:
             return None
         with self.connect() as connection:
             row = connection.execute(f"{PROBLEM_SELECT} WHERE id = ?", (pid,)).fetchone()
-            return format_problem(row)
+            problem = format_problem(row)
+            if problem is None:
+                return None
+            self._attach_story_links(connection, [problem])
+            problem["translations"] = [
+                format_row(item, ("hints",))
+                for item in connection.execute(
+                    "SELECT * FROM problem_translations WHERE problem_id = ? ORDER BY language",
+                    (pid,),
+                ).fetchall()
+            ]
+            problem["solution_traces"] = [
+                format_row(item, ("trace_json",))
+                for item in connection.execute(
+                    "SELECT * FROM problem_solution_traces WHERE problem_id = ? ORDER BY hint_level",
+                    (pid,),
+                ).fetchall()
+            ]
+            audio = connection.execute(
+                "SELECT cache_key, url, status, updated_at FROM problem_audio_assets WHERE problem_id = ?",
+                (pid,),
+            ).fetchone()
+            problem["audio_asset"] = dict(audio) if audio else None
+            return problem
+
+    @staticmethod
+    def _attach_story_links(connection: sqlite3.Connection, problems: list[dict | None]) -> None:
+        valid = [problem for problem in problems if problem is not None]
+        if not valid or connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issues'"
+        ).fetchone() is None:
+            return
+        ids = [int(problem["id"]) for problem in valid]
+        placeholders = ",".join("?" for _ in ids)
+        rows = connection.execute(
+            f"""SELECT id, key, summary, status, problem_id
+                FROM issues WHERE problem_id IN ({placeholders})""",
+            ids,
+        ).fetchall()
+        links = {int(row["problem_id"]): dict(row) for row in rows}
+        for problem in valid:
+            story = links.get(int(problem["id"]))
+            problem["story"] = story
+            problem["story_id"] = story["id"] if story else None
+            problem["story_key"] = story["key"] if story else None
+
+    def save_translation(self, problem_id: int, language: str, result: dict) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO problem_translations
+                     (problem_id, language, title, problem_statements, hints, provider, model, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(problem_id, language) DO UPDATE SET
+                     title=excluded.title, problem_statements=excluded.problem_statements,
+                     hints=excluded.hints, provider=excluded.provider, model=excluded.model,
+                     updated_at=CURRENT_TIMESTAMP""",
+                (problem_id, language, result.get("translatedTitle", ""),
+                 result.get("translatedStatements", ""),
+                 json.dumps(result.get("translatedHints", [])),
+                 result.get("provider"), result.get("model")),
+            )
+
+    def save_solution_trace(self, problem_id: int, result: dict) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO problem_solution_traces
+                     (problem_id, hint_level, trace_json, provider, model, updated_at)
+                   VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(problem_id, hint_level) DO UPDATE SET
+                     trace_json=excluded.trace_json, provider=excluded.provider,
+                     model=excluded.model, updated_at=CURRENT_TIMESTAMP""",
+                (problem_id, int(result.get("hintLevel", 1)), json.dumps(result),
+                 result.get("provider"), result.get("model")),
+            )
+
+    def save_audio_asset(self, problem_id: int, result: dict) -> None:
+        url = f'/api/audio/{result["key"]}.mp3' if result.get("status") == "ready" and result.get("key") else None
+        with self.connect() as connection:
+            connection.execute(
+                """INSERT INTO problem_audio_assets (problem_id, cache_key, url, status, updated_at)
+                   VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                   ON CONFLICT(problem_id) DO UPDATE SET cache_key=excluded.cache_key,
+                     url=excluded.url, status=excluded.status, updated_at=CURRENT_TIMESTAMP""",
+                (problem_id, result.get("key"), url, result.get("status", "missing")),
+            )
 
     def create_problem(self, problem: dict) -> dict:
         with self.connect() as connection:
@@ -449,6 +564,14 @@ class Database:
         with self.connect() as connection:
             deleted_problems = connection.execute("SELECT COUNT(*) FROM problems").fetchone()[0]
             deleted_submissions = connection.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
+            if connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'issues'"
+            ).fetchone():
+                connection.execute(
+                    """UPDATE issues SET parent_id = NULL WHERE parent_id IN
+                       (SELECT id FROM issues WHERE problem_id IS NOT NULL)"""
+                )
+                connection.execute("DELETE FROM issues WHERE problem_id IS NOT NULL")
             connection.execute("DELETE FROM submissions")
             connection.execute("DELETE FROM problems")
             connection.execute("DELETE FROM chat_messages")

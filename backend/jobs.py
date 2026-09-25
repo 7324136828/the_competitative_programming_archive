@@ -115,8 +115,15 @@ class SubmissionJobs:
 
         try:
             grading = submit_code(language, code, test_cases, timeout_ms, progress=progress)
-            self.database.finish_submission_job(job_id, grading)
+            submission = self.database.finish_submission_job(job_id, grading)
+            if submission and submission.get("problem_id"):
+                try:
+                    from .jira.services.issues import update_coding_story_submission
+                    update_coding_story_submission(submission["problem_id"], grading["status"], grading.get("results"))
+                except Exception:
+                    pass
         except _RemovedJob:
+
             # Clearing the database cancels pending work without recreating deleted rows.
             pass
         except Exception:

@@ -1,468 +1,215 @@
-import React, { useState, useEffect, useRef } from 'react';
-import confetti from 'canvas-confetti';
-import Navbar from './components/Navbar';
+import React, { useState, useEffect } from 'react';
+import { AuthProvider } from './context/AuthContext';
+import { ProjectProvider, useProject } from './context/ProjectContext';
+import { Navbar } from './components/layout/Navbar';
+import { Sidebar } from './components/layout/Sidebar';
+import { GlobalSearchModal } from './components/layout/GlobalSearchModal';
+import { CreateIssueModal } from './components/issues/CreateIssueModal';
+import { IssueDetailModal } from './components/issues/IssueDetailModal';
+import { ImportStoriesModal } from './components/issues/ImportStoriesModal';
+import { AiStoryModal } from './components/issues/AiStoryModal';
+import { ActivityScreen } from './components/activity/ActivityScreen';
+
+import { KanbanScrumBoard } from './components/board/KanbanScrumBoard';
+import { BacklogView } from './components/backlog/BacklogView';
+import { TimelineGanttView } from './components/timeline/TimelineGanttView';
+import { CrossTeamPlanView } from './components/crossteam/CrossTeamPlanView';
+import { ReleasesView } from './components/releases/ReleasesView';
+import { SprintBurndownView } from './components/reports/SprintBurndownView';
+import { DashboardView } from './components/dashboard/DashboardView';
+import { IssuesFilterView } from './components/issues/IssuesFilterView';
+import { ProjectSettingsView } from './components/settings/ProjectSettingsView';
+import { MetricsView } from './components/metrics/MetricsView';
+import { AiAssistantView } from './components/ai/AiAssistantView';
 import ProblemList from './components/ProblemList';
-import ProblemDetail from './components/ProblemDetail';
-import CodeEditor from './components/CodeEditor';
-import TestConsole from './components/TestConsole';
-import TranslateModal from './components/TranslateModal';
-import GenerateProblemModal from './components/GenerateProblemModal';
-import UploadModal from './components/UploadModal';
-import ChatDrawer from './components/ChatDrawer';
-import LLMModel from './components/LLMModel';
-import SolveWorkspace from './components/SolveWorkspace';
-import SubmissionArchive from './components/SubmissionArchive';
-import SettingsView from './components/SettingsView';
-import useEditorDraft from './hooks/useEditorDraft';
-import { CODE_TEMPLATES, DEFAULT_LANGUAGE } from './utils/codeTemplates';
-import { clearDatabase, fetchProblem, runCode, submitCode, fetchSubmissions, fetchProblems, fetchLanguages } from './services/api';
+import { fetchProblem } from './services/api';
+import { api } from './api/client';
 
-export default function App() {
-  const [view, setView] = useState('list');
-  const [problemId, setProblemId] = useState(null);
-  const [problem, setProblem] = useState(null);
-  const [loadingProblem, setLoadingProblem] = useState(false);
-  const [databaseVersion, setDatabaseVersion] = useState(0);
-  const [archiveVersion, setArchiveVersion] = useState(0);
-  const [isClearingDatabase, setIsClearingDatabase] = useState(false);
-  const [databaseNotice, setDatabaseNotice] = useState(null);
-  const problemRequest = useRef(0);
-  const databaseGeneration = useRef(0);
-  const clearingDatabase = useRef(false);
-  const execution = useRef(null);
+const VALID_TABS = [
+  'board',
+  'backlog',
+  'problems',
+  'timeline',
+  'crossteam',
+  'releases',
+  'burndown',
+  'dashboard',
+  'filters',
+  'settings',
+  'ai',
+  'metrics'
+];
 
-  // Editor State
-  const [language, setLanguage] = useState(DEFAULT_LANGUAGE);
-  const [availableLanguages, setAvailableLanguages] = useState([]);
-  const [isLoadingLanguages, setIsLoadingLanguages] = useState(true);
-  const [languagesError, setLanguagesError] = useState(null);
-  const [languageDetectionVersion, setLanguageDetectionVersion] = useState(0);
-  const draft = useEditorDraft(problemId, language, view === 'solve' && problem?.id === problemId && !loadingProblem);
+const MainApp = () => {
+  const [activeTab, setActiveTab] = useState(() => {
+    const h = window.location.hash.replace(/^#/, '');
+    return VALID_TABS.includes(h) ? h : 'board';
+  });
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
 
-  // Test Console State
-  const [testCases, setTestCases] = useState([]);
-  const [consoleTab, setConsoleTab] = useState('testcase'); // 'testcase', 'result', 'submissions'
-  const [runResult, setRunResult] = useState(null);
-  const [submissionResult, setSubmissionResult] = useState(null);
-  const [submissions, setSubmissions] = useState([]);
-  const [isRunning, setIsRunning] = useState(false);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [executionStatus, setExecutionStatus] = useState(null);
+  const {
+    currentProject,
+    activeActivityIssue,
+    closeActivity,
+    openActivity,
+    isImportStoriesOpen,
+    closeImportStories,
+    isAiStoryOpen,
+    closeAiStory,
+    triggerRefresh,
+  } = useProject();
 
-  useEffect(() => () => execution.current?.abort(), []);
+  // Global search shortcut (Ctrl+K or Cmd+K)
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setIsSearchOpen(true);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
-  // Modals & AI State
-  const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [isTranslateOpen, setIsTranslateOpen] = useState(false);
-  const [isGenerateOpen, setIsGenerateOpen] = useState(false);
-  const [isChatOpen, setIsChatOpen] = useState(false);
-  const [translatedData, setTranslatedData] = useState(null);
+  // Hash synchronization
+  useEffect(() => {
+    const onHashChange = () => {
+      const h = window.location.hash.replace(/^#/, '');
+      if (VALID_TABS.includes(h)) setActiveTab(h);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
 
   useEffect(() => {
-    const controller = new AbortController();
-    setIsLoadingLanguages(true);
-    setLanguagesError(null);
+    if (window.location.hash !== `#${activeTab}`) {
+      history.replaceState(null, '', `#${activeTab}`);
+    }
+  }, [activeTab]);
 
-    fetchLanguages({ signal: controller.signal })
-      .then(languages => {
-        if (controller.signal.aborted) return;
-        const supportedLanguages = languages.filter(item => Object.hasOwn(CODE_TEMPLATES, item.id));
-        setAvailableLanguages(supportedLanguages);
-        setLanguage(current => {
-          if (supportedLanguages.some(item => item.id === current)) return current;
-          return supportedLanguages.find(item => item.id === DEFAULT_LANGUAGE)?.id || supportedLanguages[0]?.id || '';
-        });
-      })
-      .catch(err => {
-        if (controller.signal.aborted) return;
-        setAvailableLanguages([]);
-        setLanguagesError(err.message);
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setIsLoadingLanguages(false);
-      });
+  useEffect(() => {
+    api.logActivity('view', { view: activeTab });
+  }, [activeTab]);
 
-    return () => controller.abort();
-  }, [languageDetectionVersion]);
-
-  const isLanguageAvailable = !isLoadingLanguages && !languagesError && availableLanguages.some(item => item.id === language);
-
-  // Load problem details
-  const loadProblemData = async (id) => {
-    const request = ++problemRequest.current;
-    execution.current?.abort();
-    setIsRunning(false);
-    setIsSubmitting(false);
-    setExecutionStatus(null);
-    setLoadingProblem(true);
-    setProblem(null);
-    setTestCases([]);
-    setSubmissions([]);
-    setRunResult(null);
-    setSubmissionResult(null);
-    setTranslatedData(null);
+  // Open problem directly in Activity Screen
+  const handleSelectProblemFromList = async (problemId) => {
     try {
-      const res = await fetchProblem(id);
-      if (request !== problemRequest.current) return;
+      const res = await fetchProblem(problemId);
       if (res.success && res.problem) {
-        setProblem(res.problem);
-        setTestCases(res.problem.sample_input_output || []);
-      }
-      // Load submissions
-      const subRes = await fetchSubmissions(id);
-      if (request !== problemRequest.current) return;
-      if (subRes.success) {
-        setSubmissions(subRes.submissions);
-      }
-    } catch (err) {
-      console.error('Error loading problem:', err);
-    } finally {
-      if (request === problemRequest.current) setLoadingProblem(false);
-    }
-  };
-
-  useEffect(() => {
-    if (problemId) {
-      loadProblemData(problemId);
-    }
-  }, [problemId]);
-
-  const handleSelectProblem = (id) => {
-    if (clearingDatabase.current) return;
-    if (id !== problemId) execution.current?.abort();
-    setProblemId(id);
-    setView('solve');
-  };
-
-  const handleRandomProblem = async () => {
-    if (clearingDatabase.current) return;
-    const generation = databaseGeneration.current;
-    try {
-      const list = await fetchProblems({ limit: 50 });
-      if (generation !== databaseGeneration.current || clearingDatabase.current) return;
-      if (list.success && list.problems.length > 0) {
-        const randomIndex = Math.floor(Math.random() * list.problems.length);
-        const randomP = list.problems[randomIndex];
-        handleSelectProblem(randomP.id);
-      }
-    } catch (e) {
-      console.error('Error picking random problem:', e);
-    }
-  };
-
-  const handleClearDatabase = async () => {
-    if (clearingDatabase.current || isRunning || isSubmitting || isUploadOpen || isTranslateOpen || isGenerateOpen) return;
-    if (!window.confirm('Permanently delete ALL problems, submission history, and saved editor draft references from the database? Your current workspace will also be reset. This cannot be undone.')) return;
-
-    clearingDatabase.current = true;
-    setIsClearingDatabase(true);
-    setDatabaseNotice(null);
-    databaseGeneration.current += 1;
-    problemRequest.current += 1;
-
-    try {
-      const result = await clearDatabase();
-      setProblemId(null);
-      setProblem(null);
-      setLoadingProblem(false);
-      setTranslatedData(null);
-      setTestCases([]);
-      setRunResult(null);
-      setSubmissionResult(null);
-      setSubmissions([]);
-      setConsoleTab('testcase');
-      setLanguage(availableLanguages.find(item => item.id === DEFAULT_LANGUAGE)?.id || availableLanguages[0]?.id || '');
-      draft.clear();
-      setIsUploadOpen(false);
-      setIsTranslateOpen(false);
-      setIsGenerateOpen(false);
-      setDatabaseVersion(version => version + 1);
-      setView('list');
-      setDatabaseNotice({
-        type: 'success',
-        message: `Database cleared: ${result.deletedProblems} problems and ${result.deletedSubmissions} submissions deleted.`
-      });
-    } catch (err) {
-      setDatabaseNotice({ type: 'error', message: err.message });
-      if (loadingProblem && problemId) loadProblemData(problemId);
-    } finally {
-      clearingDatabase.current = false;
-      setIsClearingDatabase(false);
-    }
-  };
-
-  const handleLanguageChange = (newLang) => {
-    if (availableLanguages.some(item => item.id === newLang)) setLanguage(newLang);
-  };
-
-  const handleCodeChange = (newCode) => {
-    if (!isLanguageAvailable || !draft.ready) return;
-    draft.change(newCode);
-  };
-
-  const handleImportCode = async (source, isCurrent) => {
-    if (!isLanguageAvailable || !draft.ready || clearingDatabase.current) return false;
-    const imported = await draft.importCode(source.language, source.code, isCurrent);
-    if (imported) setLanguage(source.language);
-    return imported;
-  };
-
-  // Run code against active testcase
-  const handleRunCode = async () => {
-    if (!problem || loadingProblem || clearingDatabase.current || !draft.ready || !isLanguageAvailable || isRunning || isSubmitting) return;
-    const controller = new AbortController();
-    execution.current = controller;
-    const request = problemRequest.current;
-    setIsRunning(true);
-    setRunResult(null);
-    setSubmissionResult(null);
-    setExecutionStatus(language === 'cpp' || language === 'java' ? 'Compiling and running code...' : 'Running code...');
-    setConsoleTab('result');
-
-    const activeCase = testCases[0] || { input: '' };
-    try {
-      const res = await runCode({
-        language,
-        code: draft.code,
-        input: activeCase.input,
-        expectedOutput: activeCase.output,
-        timeoutMs: 5000
-      }, { signal: controller.signal });
-
-      if (controller.signal.aborted || request !== problemRequest.current) return;
-      if (res.success) {
-        setRunResult(res.result);
-      }
-    } catch (err) {
-      if (controller.signal.aborted || request !== problemRequest.current) return;
-      setRunResult({
-        status: 'Runtime Error',
-        error: err.message,
-        stdout: '',
-        runtimeMs: 0
-      });
-    } finally {
-      if (!controller.signal.aborted && request === problemRequest.current) {
-        setIsRunning(false);
-        setExecutionStatus(null);
-      }
-    }
-  };
-
-  // Submit code against all problem test cases
-  const handleSubmitCode = async () => {
-    if (!problem || loadingProblem || clearingDatabase.current || !draft.ready || !isLanguageAvailable || isRunning || isSubmitting) return;
-    const controller = new AbortController();
-    execution.current = controller;
-    const request = problemRequest.current;
-    setIsSubmitting(true);
-    setRunResult(null);
-    setSubmissionResult(null);
-    setExecutionStatus('Queued for judging...');
-    setConsoleTab('result');
-
-    try {
-      const res = await submitCode({
-        problemId: problem.id,
-        language,
-        code: draft.code,
-        customTestCases: testCases
-      }, {
-        signal: controller.signal,
-        onProgress: job => {
-          if (controller.signal.aborted || request !== problemRequest.current) return;
-          const labels = { queued: 'Queued for judging...', compiling: 'Compiling code...', running: 'Running test cases...' };
-          setExecutionStatus(labels[job.phase] || job.status || 'Judging submission...');
-        }
-      });
-
-      if (controller.signal.aborted || request !== problemRequest.current) return;
-      if (res.success) {
-        setSubmissionResult(res);
-        setExecutionStatus(null);
-
-        if (res.grading?.status === 'Accepted') {
-          setProblem(current => current?.id === problem.id ? { ...current, is_solved: true } : current);
-          setArchiveVersion(version => version + 1);
-        }
-
-        // Refresh submission history
-        const subRes = await fetchSubmissions(problem.id).catch(err => {
-          if (!controller.signal.aborted && request === problemRequest.current) {
-            setDatabaseNotice({ type: 'error', message: `Submission finished, but history could not refresh: ${err.message}` });
+        const p = res.problem;
+        let linkedStory = null;
+        if (p.story_id) {
+          linkedStory = await api.getIssue(p.story_id);
+        } else if (currentProject?.id) {
+          try {
+            linkedStory = await api.ensureStoryForProblem(p.id, currentProject.id);
+          } catch (linkError) {
+            console.warn('Unable to establish problem/story link:', linkError);
           }
-          return null;
+        }
+        if (linkedStory) {
+          openActivity(linkedStory);
+          return;
+        }
+        openActivity({
+          id: `problem-${p.id}`,
+          key: `CP-${p.id}`,
+          project_id: currentProject?.id || 'PROJ-1',
+          project_key: currentProject?.key || 'CP',
+          type: 'Story',
+          story_type: 'coding',
+          summary: p.title,
+          description: p.problem_statements,
+          difficulty: p.difficulty,
+          problem_id: p.id,
+          sample_input_output: p.sample_input_output || [],
+          hints: p.hints || [],
+          tags: p.tags || [],
+          status: p.is_solved ? 'Done' : 'To Do',
+          submission_status: p.is_solved ? 'Accepted' : undefined,
+          rank: 0,
+          priority: 'Medium',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         });
-        if (controller.signal.aborted || request !== problemRequest.current) return;
-        if (subRes?.success) {
-          setSubmissions(subRes.submissions);
-        }
-
-        // Celebrate if Accepted!
-        if (res.grading && res.grading.status === 'Accepted') {
-          confetti({
-            particleCount: 80,
-            spread: 60,
-            origin: { y: 0.6 }
-          });
-        }
       }
     } catch (err) {
-      if (controller.signal.aborted || request !== problemRequest.current) return;
-      setSubmissionResult({
-        grading: {
-          status: 'Submission Error',
-          totalTests: 0,
-          passedTests: 0,
-          totalRuntimeMs: 0,
-          error: err.message
-        }
-      });
-    } finally {
-      if (!controller.signal.aborted && request === problemRequest.current) {
-        setIsSubmitting(false);
-        setExecutionStatus(null);
-      }
+      console.error('Failed to load problem for activity screen:', err);
     }
+  };
+
+  const handleActivityStatusUpdated = (_issueId, _newStatus) => {
+    triggerRefresh();
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
-      {/* Top Navbar */}
+    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#F4F5F7]">
+      {/* Top Navigation */}
       <Navbar
-        currentView={view}
-        onViewChange={nextView => {
-          setView(nextView);
-          if (nextView === 'settings') setIsChatOpen(false);
-        }}
-        currentProblem={problem}
-        onRandomProblem={handleRandomProblem}
-        onOpenUpload={() => setIsUploadOpen(true)}
-        onOpenGenerate={() => setIsGenerateOpen(true)}
-        onClearDatabase={handleClearDatabase}
-        isClearingDatabase={isClearingDatabase}
-        isDatabaseBusy={isRunning || isSubmitting || isUploadOpen || isTranslateOpen || isGenerateOpen}
-        onToggleChat={() => setIsChatOpen(!isChatOpen)}
-        isChatOpen={isChatOpen}
+        onOpenSearch={() => setIsSearchOpen(true)}
+        onOpenSettings={() => setActiveTab('settings')}
       />
 
-      <div style={{ padding: '0.35rem 1.25rem', backgroundColor: '#202020', borderBottom: '1px solid #333' }}><LLMModel /></div>
+      {/* App Body with Sidebar & Content */}
+      <div className="flex-1 flex overflow-hidden">
+        <Sidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          isCollapsed={isSidebarCollapsed}
+          setIsCollapsed={setIsSidebarCollapsed}
+        />
 
-      {databaseNotice && (
-        <div
-          role={databaseNotice.type === 'error' ? 'alert' : 'status'}
-          style={{ padding: '0.65rem 1.25rem', backgroundColor: '#222', borderBottom: '1px solid #3a3a3a', color: databaseNotice.type === 'error' ? '#ff8d89' : '#2cbb5d', fontSize: '0.85rem', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '1rem' }}
-        >
-          <span>{databaseNotice.message}</span>
-          <button className="btn btn-ghost" onClick={() => setDatabaseNotice(null)} style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }}>Dismiss</button>
-        </div>
+        <main className="flex-1 flex overflow-hidden bg-white">
+          {activeTab === 'board' && <KanbanScrumBoard />}
+          {activeTab === 'backlog' && <BacklogView />}
+          {activeTab === 'problems' && (
+            <div className="flex-1 flex flex-col h-full bg-[#1c1c1c] text-white overflow-hidden">
+              <ProblemList
+                onSelectProblem={handleSelectProblemFromList}
+                onOpenStory={openIssueDetail}
+              />
+            </div>
+          )}
+          {activeTab === 'timeline' && <TimelineGanttView />}
+          {activeTab === 'crossteam' && <CrossTeamPlanView />}
+          {activeTab === 'releases' && <ReleasesView />}
+          {activeTab === 'burndown' && <SprintBurndownView />}
+          {activeTab === 'dashboard' && <DashboardView />}
+          {activeTab === 'filters' && <IssuesFilterView />}
+          {activeTab === 'settings' && <ProjectSettingsView />}
+          {activeTab === 'metrics' && <MetricsView />}
+          {activeTab === 'ai' && <AiAssistantView />}
+        </main>
+      </div>
+
+      {/* Global Modals */}
+      <GlobalSearchModal isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
+      <CreateIssueModal />
+      <IssueDetailModal onOpenProblem={handleSelectProblemFromList} />
+      <ImportStoriesModal isOpen={isImportStoriesOpen} onClose={closeImportStories} />
+      <AiStoryModal isOpen={isAiStoryOpen} onClose={closeAiStory} />
+
+      {/* Extensible Activity Screen */}
+      {activeActivityIssue && (
+        <ActivityScreen
+          issue={activeActivityIssue}
+          onClose={closeActivity}
+          onStatusUpdated={handleActivityStatusUpdated}
+        />
       )}
-
-      {/* Main Content Area */}
-      <main inert={isClearingDatabase} aria-busy={isClearingDatabase} style={{ flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-        {view === 'list' ? (
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            <ProblemList key={`${databaseVersion}-${archiveVersion}`} onSelectProblem={handleSelectProblem} />
-          </div>
-        ) : view === 'submissions' ? (
-          <SubmissionArchive key={databaseVersion} onSelectProblem={handleSelectProblem} />
-        ) : view === 'settings' ? (
-          <SettingsView />
-        ) : (
-          <SolveWorkspace
-            problem={loadingProblem ? (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#888' }}>
-                  Loading problem statement...
-                </div>
-              ) : (
-                <ProblemDetail
-                  problem={problem}
-                  translatedData={translatedData}
-                  onOpenTranslate={() => setIsTranslateOpen(true)}
-                  onOpenGenerateSimilar={() => setIsGenerateOpen(true)}
-                  onSelectProblem={handleSelectProblem}
-                  onResetTranslation={() => setTranslatedData(null)}
-                />
-              )}
-            editor={
-              <CodeEditor
-                language={language}
-                availableLanguages={availableLanguages}
-                isLoadingLanguages={isLoadingLanguages}
-                languagesError={languagesError}
-                onRetryLanguages={() => setLanguageDetectionVersion(version => version + 1)}
-                onLanguageChange={handleLanguageChange}
-                code={draft.code}
-                onCodeChange={handleCodeChange}
-                onImportCode={handleImportCode}
-                draft={draft}
-                onRun={handleRunCode}
-                onSubmit={handleSubmitCode}
-                isRunning={isRunning}
-                isSubmitting={isSubmitting}
-                executionDisabled={loadingProblem || !problem || !draft.ready}
-              />
-
-            }
-            tests={
-              <TestConsole
-                key={problem?.id || 'empty'}
-                testCases={testCases}
-                onTestCasesChange={setTestCases}
-                activeTab={consoleTab}
-                onTabChange={setConsoleTab}
-                runResult={runResult}
-                submissionResult={submissionResult}
-                problemId={problem ? problem.id : null}
-                problem={problem}
-                submissions={submissions}
-                executionStatus={executionStatus}
-              />
-            }
-          />
-        )}
-      </main>
-
-      {/* AI Chat Drawer */}
-      <ChatDrawer
-        isOpen={isChatOpen}
-        onClose={() => setIsChatOpen(false)}
-        currentProblem={problem}
-        currentCode={draft.code}
-        currentLanguage={language}
-      />
-
-      {/* Modals */}
-      <TranslateModal
-        key={`translate-${databaseVersion}-${problem?.id}`}
-        isOpen={isTranslateOpen}
-        onClose={() => setIsTranslateOpen(false)}
-        problem={problem}
-        onApplyTranslation={(data) => setTranslatedData(data)}
-      />
-
-      <GenerateProblemModal
-        key={`generate-${databaseVersion}-${problem?.id}`}
-        isOpen={isGenerateOpen}
-        onClose={() => setIsGenerateOpen(false)}
-        problem={problem}
-        onProblemCreated={(newProb) => {
-          setIsGenerateOpen(false);
-          setDatabaseVersion(version => version + 1);
-          handleSelectProblem(newProb.id);
-        }}
-      />
-
-      <UploadModal
-        key={`upload-${databaseVersion}`}
-        isOpen={isUploadOpen}
-        onClose={() => setIsUploadOpen(false)}
-        onUploadComplete={() => {
-          setIsUploadOpen(false);
-          setDatabaseVersion(version => version + 1);
-          setDatabaseNotice(null);
-        }}
-      />
     </div>
   );
-}
+};
+
+export const App = () => {
+  return (
+    <AuthProvider>
+      <ProjectProvider>
+        <MainApp />
+      </ProjectProvider>
+    </AuthProvider>
+  );
+};
+
+export default App;

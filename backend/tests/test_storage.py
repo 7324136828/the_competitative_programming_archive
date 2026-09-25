@@ -228,6 +228,31 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(archive.namelist(), ["manifest.json"])
             self.assertEqual(json.loads(archive.read("manifest.json"))["totalSubmissions"], 0)
 
+    def test_problem_artifacts_are_persisted_with_problem_details(self):
+        self.database.save_translation(self.problem_id, 'es', {
+            'translatedTitle': 'Suma',
+            'translatedStatements': 'Suma dos nÃºmeros.',
+            'translatedHints': ['Usa la suma.'],
+            'provider': 'mock',
+            'model': 'test-model',
+        })
+        self.database.save_solution_trace(self.problem_id, {
+            'hintLevel': 2,
+            'hints': [{'step': 1}, {'step': 2}],
+            'provider': 'mock',
+            'model': 'test-model',
+        })
+        self.database.save_audio_asset(self.problem_id, {
+            'key': 'a' * 64,
+            'status': 'ready',
+        })
+
+        problem = self.database.get_problem(self.problem_id)
+        self.assertEqual(problem['translations'][0]['title'], 'Suma')
+        self.assertEqual(problem['translations'][0]['hints'], ['Usa la suma.'])
+        self.assertEqual(problem['solution_traces'][0]['trace_json']['hintLevel'], 2)
+        self.assertEqual(problem['audio_asset']['url'], f"/api/audio/{'a' * 64}.mp3")
+
 
 if __name__ == "__main__":
     unittest.main()

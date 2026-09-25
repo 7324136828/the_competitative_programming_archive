@@ -26,7 +26,7 @@ from .llm import (
     get_thinking_hints,
     translate_problem,
 )
-from .paths import ROOT, default_database_path, default_storage_path
+from .paths import ROOT, default_database_path, default_storage_path, legacy_archive_database_path
 from .runtimes import available_languages
 from .seed import seed_database
 from .storage import DraftConflict, DraftProblemNotFound, DraftStore, export_submissions
@@ -111,7 +111,7 @@ def create_app(config: dict | None = None) -> Flask:
         raise ValueError("MAX_UPLOAD_MB must be a positive integer (in MiB).") from error
 
     app.config.from_mapping(
-        DATABASE_PATH=os.environ.get("DATABASE_PATH") or str(default_database_path()),
+        DATABASE_PATH=os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH") or str(default_database_path()),
         AUTO_SEED=os.environ.get("AUTO_SEED", "1").lower() not in ("0", "false", "no"),
         SEED_PATH=str(ROOT / "problem.json"),
         CLIENT_DIST=str(ROOT / "frontend" / "dist"),
@@ -149,6 +149,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.extensions["audio_store"] = audio
 
     mutation_lock = threading.RLock()
+    app.extensions["mutation_lock"] = mutation_lock
     tag_generation_lock = threading.Lock()
 
     def find_problem(problem_id: Any) -> dict:
@@ -158,6 +159,40 @@ def create_app(config: dict | None = None) -> Flask:
         if problem is None:
             raise NotFound("Problem not found.")
         return problem
+
+    def ensure_problem_story(problem: dict) -> dict | None:
+        """Keep archive creation and story creation linked in the unified app."""
+        try:
+            from .jira.db import db as jira_database
+            from .jira.services.issues import ensure_story_for_problem
+            if (
+                jira_database.path == ':memory:'
+                or Path(jira_database.path).resolve() != database.path.resolve()
+            ):
+                return None
+            return ensure_story_for_problem(problem["id"])
+        except Exception as error:
+            # Standalone Flask tests intentionally do not initialize the Jira
+            # schema. In the unified server a missing link is an actual error.
+            if "no such table" in str(error).lower() or "project is required" in str(error).lower():
+                return None
+            raise
+
+    def backfill_problem_stories() -> int:
+        """Link imported problems only when this Flask app shares Jira's database."""
+        try:
+            from .jira.db import db as jira_database
+            from .jira.services.issues import backfill_archive_story_links
+            if (
+                jira_database.path == ':memory:'
+                or Path(jira_database.path).resolve() != database.path.resolve()
+            ):
+                return 0
+            return backfill_archive_story_links()
+        except Exception as error:
+            if "no such table" in str(error).lower() or "project is required" in str(error).lower():
+                return 0
+            raise
 
     # CORS support
     @app.after_request
@@ -261,19 +296,21 @@ def create_app(config: dict | None = None) -> Flask:
             draft = drafts.save(problem_id, language, data.get("code"), data.get("revision"))
         return jsonify(success=True, draft=draft)
 
-    def audio_response(result: dict):
+    def audio_response(result: dict, problem_id: int | None = None):
+        if problem_id is not None:
+            database.save_audio_asset(problem_id, result)
         if result["status"] == "ready":
             result = {**result, "url": f'/api/audio/{result["key"]}.mp3'}
         return jsonify(success=True, audio=result)
 
     @app.get("/api/problems/<int:problem_id>/audio")
     def read_problem_audio(problem_id: int):
-        return audio_response(audio.get(find_problem(problem_id)))
+        return audio_response(audio.get(find_problem(problem_id)), problem_id)
 
     @app.post("/api/problems/<int:problem_id>/audio")
     def generate_problem_audio(problem_id: int):
         result = audio.start(find_problem(problem_id))
-        return audio_response(result), (200 if result["status"] == "ready" else 202)
+        return audio_response(result, problem_id), (200 if result["status"] == "ready" else 202)
 
     @app.post("/api/audio/responses")
     def generate_response_audio():
@@ -311,7 +348,9 @@ def create_app(config: dict | None = None) -> Flask:
         problem = normalize_problem(json_object(), require_content=True)
         with mutation_lock:
             created = database.create_problem(problem)
-        return jsonify(success=True, problem=created, message="Problem successfully saved to database!")
+            story = ensure_problem_story(created)
+        return jsonify(success=True, problem=database.get_problem(created["id"]), story=story,
+                       message="Problem and linked story successfully saved to database!")
 
     @app.post("/api/problems/upload")
     def upload_problems():
@@ -333,10 +372,12 @@ def create_app(config: dict | None = None) -> Flask:
         problems = [normalize_problem(problem) for problem in raw_problems]
         with mutation_lock:
             inserted = database.bulk_insert(problems)
+            linked_stories = backfill_problem_stories()
             total = database.count()
         return jsonify(
             success=True,
             insertedCount=inserted,
+            linkedStories=linked_stories,
             totalNow=total,
             message=f"Successfully imported and persisted {inserted} problems to the database!",
         )
@@ -404,7 +445,13 @@ def create_app(config: dict | None = None) -> Flask:
                     test_results=results,
                 )
             )
+            try:
+                from .jira.services.issues import update_coding_story_submission
+                update_coding_story_submission(problem["id"], grading["status"], results)
+            except Exception:
+                pass
         return jsonify(success=True, submission=submission, grading=grading)
+
 
     @app.get("/api/submission-jobs/<string:job_id>")
     def submission_job(job_id: str):
@@ -457,7 +504,10 @@ def create_app(config: dict | None = None) -> Flask:
         target = data.get("targetLanguage") or "en"
         if not isinstance(target, str):
             raise ValueError("targetLanguage must be a string.")
-        return jsonify(translate_problem(problem, target, model=data.get("model")))
+        result = translate_problem(problem, target, model=data.get("model"))
+        if problem.get("id") is not None:
+            database.save_translation(problem["id"], target, result)
+        return jsonify(result)
 
     # Requirement (3): Provide hints in terms of 5-10 programming thinking steps
     @app.post("/api/llm/hint")
@@ -466,7 +516,9 @@ def create_app(config: dict | None = None) -> Flask:
         data = json_object()
         problem = find_problem(data.get("problemId"))
         hint_level = data.get("hintLevel", 1)
-        return jsonify(get_thinking_hints(problem, hint_level, model=data.get("model")))
+        result = get_thinking_hints(problem, hint_level, model=data.get("model"))
+        database.save_solution_trace(problem["id"], result)
+        return jsonify(result)
 
     @app.post("/api/llm/recommendations")
     @app.post("/api/recommendations")
@@ -539,6 +591,8 @@ def create_app(config: dict | None = None) -> Flask:
         if auto_save:
             with mutation_lock:
                 saved = database.create_problem(normalize_problem(generated))
+                ensure_problem_story(saved)
+                saved = database.get_problem(saved["id"])
         return jsonify(
             success=True,
             provider=model_info["provider"],
@@ -595,16 +649,90 @@ def create_app(config: dict | None = None) -> Flask:
     return app
 
 
+def create_unified_app(flask_config: dict | None = None):
+    from .database_unification import copy_legacy_workspace, merge_legacy_databases
+    from .jira.config import resolve_db_path
+    from .jira.db import db as jira_database
+    from .jira.main import app as jira_app, initialize_jira_data
+    from starlette.middleware.wsgi import WSGIMiddleware
+
+    requested_config = dict(flask_config or {})
+    unified_path = Path(
+        requested_config.get("DATABASE_PATH")
+        or os.environ.get("DATABASE_PATH")
+        or os.environ.get("DB_PATH")
+        or default_database_path()
+    ).resolve()
+    auto_seed = requested_config.get(
+        "AUTO_SEED",
+        os.environ.get("AUTO_SEED", "1").lower() not in ("0", "false", "no"),
+    )
+    requested_config.update({"DATABASE_PATH": str(unified_path), "AUTO_SEED": False})
+    flask_app = create_app(requested_config)
+    if jira_database.path == ':memory:' or Path(jira_database.path).resolve() != unified_path:
+        jira_database.reopen(str(unified_path))
+
+    legacy_jira_path = Path(__file__).resolve().parent / 'data' / 'jira.db'
+    should_migrate = requested_config.get(
+        "MIGRATE_LEGACY_DATABASES",
+        not requested_config.get("TESTING", False),
+    )
+    migrations = merge_legacy_databases(
+        unified_path,
+        [legacy_archive_database_path(), legacy_jira_path, resolve_db_path()],
+    ) if should_migrate else {}
+    if migrations:
+        print(f"Unified database imported legacy data from: {', '.join(migrations)}")
+        if not requested_config.get("WORKSPACE_STORAGE_DIR") and not os.environ.get("WORKSPACE_STORAGE_DIR"):
+            target_workspace = Path(flask_app.config["WORKSPACE_STORAGE_DIR"])
+            for source, copied_tables in migrations.items():
+                if copied_tables.get('problems', 0):
+                    copied_files = copy_legacy_workspace(
+                        default_storage_path(source),
+                        target_workspace,
+                    )
+                    if copied_files:
+                        print(f"Unified workspace imported {copied_files} file(s) from legacy storage.")
+    if auto_seed and flask_app.extensions["database"].count() == 0:
+        seed_database(flask_app.extensions["database"], flask_app.config["SEED_PATH"])
+    flask_app.config["AUTO_SEED"] = auto_seed
+    initialize_jira_data()
+    if requested_config.get("BACKFILL_PROBLEM_STORIES", True):
+        from .jira.services.issues import (
+            backfill_archive_story_links,
+            backfill_coding_story_problem_links,
+        )
+        linked_problems = backfill_coding_story_problem_links()
+        linked_stories = backfill_archive_story_links()
+        if linked_problems or linked_stories:
+            print(
+                "Unified database repaired missing links: "
+                f"{linked_problems} coding story problem(s), "
+                f"{linked_stories} archive problem story/stories."
+            )
+
+    jira_app.state.archive_database = flask_app.extensions["database"]
+    jira_app.state.archive_mutation_lock = flask_app.extensions["mutation_lock"]
+    jira_app.state.archive_app = flask_app
+    previous_mount = getattr(jira_app.state, "archive_mount", None)
+    if previous_mount in jira_app.router.routes:
+        jira_app.router.routes.remove(previous_mount)
+    jira_app.mount("/", WSGIMiddleware(flask_app), name="archive")
+    jira_app.state.archive_mount = jira_app.router.routes[-1]
+    return jira_app
+
+
 def main():
     import argparse
+    import uvicorn
 
-    parser = argparse.ArgumentParser(description="CodeJudge Backend Server")
+    parser = argparse.ArgumentParser(description="Unified Competitive Programming & Jira Server")
     parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"), help="Host to listen on")
     parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", "3001")), help="Port to listen on")
     args = parser.parse_args()
 
-    app = create_app()
-    app.run(host=args.host, port=args.port, threaded=True)
+    unified_app = create_unified_app()
+    uvicorn.run(unified_app, host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

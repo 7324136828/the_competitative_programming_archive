@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/services/api.test.js src/services/draftStore.test.js src/utils/sourceFiles.test.js src/utils/richContent.test.js",
+    "test": "node --test src/services/api.test.js src/services/draftStore.test.js src/utils/sourceFiles.test.js src/utils/richContent.test.js src/services/jiraCp.test.js",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -16,6 +16,7 @@
     "@codemirror/theme-one-dark": "^6.1.2",
     "@uiw/react-codemirror": "^4.23.7",
     "canvas-confetti": "^1.9.4",
+    "clsx": "^2.1.1",
     "katex": "^0.16.47",
     "lucide-react": "^0.475.0",
     "react": "^19.0.0",
@@ -25,10 +26,15 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "remark-parse": "^11.0.0",
+    "tailwind-merge": "^3.7.0",
     "unified": "^11.0.5"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.6.1",
+    "postcss": "^8.5.28",
+    "tailwindcss": "^3.4.19",
+    "typescript": "^5.9.3",
     "vite": "^6.1.0"
   }
 }

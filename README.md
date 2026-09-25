@@ -115,11 +115,17 @@ precedence over values in `.env`.
 | `BACKEND_PORT` | `3001` | First backend port to try |
 | `FRONTEND_PORT` | `5173` | First frontend port to try |
 | `BACKEND_HOST` | `127.0.0.1` | Backend bind address |
-| `DATABASE_PATH` | System temporary directory under `codejudge/<project-id>/leetcode.db` | SQLite database; set an explicit path for long-term storage |
+| `DATABASE_PATH` | `backend/data/jira.db` | Single SQLite database shared by projects, stories, problems, submissions, and settings |
 | `WORKSPACE_STORAGE_DIR` | `data/workspace/<database-id>` | Saved editor drafts and narration files |
 | `CONNECTOR_BASE_URL` | `http://127.0.0.1:8301/v1` | The Connector API for AI and speech requests |
 | `CONNECTOR_SPEECH_TIMEOUT_SECONDS` | `180` | Timeout for Connector speech generation |
 | `LLM_MODEL` | First discovered model | Active Connector configuration ID |
+
+The application uses one physical SQLite file for both project/story data and
+competitive-programming data. On the first unified startup, an existing legacy
+problem archive is imported when the unified problem tables are empty. Its
+database file is retained as a backup, and missing draft/audio workspace files
+are copied without overwriting newer files.
 
 ## API
 

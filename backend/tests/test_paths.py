@@ -2,7 +2,6 @@
 
 import os
 from pathlib import Path
-import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -12,24 +11,24 @@ from backend import paths, seed
 
 class DatabasePathTests(unittest.TestCase):
     def setUp(self):
+        import tempfile
         temporary = tempfile.TemporaryDirectory(prefix="judge_paths_test_")
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         for mock in (
-            patch("backend.paths.tempfile.gettempdir", return_value=str(self.root)),
+            patch("backend.paths.ROOT", self.root),
             patch.dict(os.environ, {"DATABASE_PATH": ""}),
         ):
             mock.start()
             self.addCleanup(mock.stop)
 
-    def test_default_is_stable_in_system_temp_and_shared_with_seed(self):
+    def test_default_is_stable_and_shared_with_seed(self):
         first = paths.default_database_path()
         self.assertEqual(first, paths.default_database_path())
         self.assertEqual(first, seed.default_database_path())
-        self.assertTrue(first.is_relative_to(self.root / "codejudge"))
-        self.assertEqual(first.name, "leetcode.db")
+        self.assertEqual(first, self.root / "backend" / "data" / "jira.db")
 
-    def test_project_copies_have_separate_databases(self):
+    def test_project_copies_have_separate_unified_databases(self):
         with patch.object(paths, "ROOT", self.root / "first-project"):
             first = paths.default_database_path()
         with patch.object(paths, "ROOT", self.root / "second-project"):
