@@ -123,7 +123,9 @@ And the concept of problem sets, we can attribute to features.
 
 And set of problem sets, we can call epics, which can be created by the user. 
 
-In order to perserve the functionality of submission and testing code and read aloud and hints,
+We can have story with type either coding/learning/non-coding type.
+
+In order to perserve the functionality of submission and testing code and read aloud and hints
 
 when we open a story and it's associated with a coding problem, 
 then we should open up an activity screen which allow the submission and testing etc.
