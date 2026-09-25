@@ -143,6 +143,7 @@ precedence over values in `.env`.
 | --- | --- | --- |
 | `GET` | `/api/health` | Backend health check |
 | `GET` | `/api/problems` | Browse and search saved problems |
+| `POST` | `/api/llm/generate-tags` | Generate and persist tags for up to six untagged problems |
 | `POST` | `/api/problems/upload` | Import a problem collection |
 | `GET` | `/api/llm/models` | Discover available AI models |
 | `POST` | `/api/run` | Execute code with custom input |

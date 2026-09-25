@@ -19,6 +19,7 @@ from .llm import (
     LLMError,
     chat_response,
     generate_ai_problem,
+    generate_problem_tags,
     generate_test_cases_by_limitations,
     get_recommendations,
     get_model_info,
@@ -72,7 +73,7 @@ def normalize_problem(value: Any, require_content: bool = False) -> dict[str, An
     for field, default in (
         ("sample_input_output", value.get("samples", [])),
         ("hints", []),
-        ("tags", ["Algorithm"]),
+        ("tags", []),
     ):
         items = value.get(field, default)
         if isinstance(items, str):
@@ -156,6 +157,7 @@ def create_app(config: dict | None = None) -> Flask:
     app.extensions["audio_store"] = audio
 
     mutation_lock = threading.RLock()
+    tag_generation_lock = threading.Lock()
 
     def find_problem(problem_id: Any) -> dict:
         if not isinstance(problem_id, (int, str)) or isinstance(problem_id, bool):
@@ -243,7 +245,7 @@ def create_app(config: dict | None = None) -> Flask:
     def list_problems():
         arguments = {
             key: request.args[key]
-            for key in ("page", "limit", "search", "language", "difficulty")
+            for key in ("page", "limit", "search", "language", "difficulty", "solved")
             if key in request.args
         }
         return jsonify(success=True, **database.get_problems(**arguments))
@@ -480,6 +482,41 @@ def create_app(config: dict | None = None) -> Flask:
         data = json_object()
         current = find_problem(data["problemId"]) if data.get("problemId") else None
         return jsonify(get_recommendations(current, database.get_problems(limit=100)["problems"]))
+
+    @app.post("/api/llm/generate-tags")
+    def generate_tags():
+        data = json_object()
+        problem_ids = data.get("problemIds")
+        if (
+            not isinstance(problem_ids, list)
+            or not 1 <= len(problem_ids) <= 6
+            or any(not isinstance(item, int) or isinstance(item, bool) or item <= 0 for item in problem_ids)
+            or len(set(problem_ids)) != len(problem_ids)
+        ):
+            raise ValueError("problemIds must contain 1 to 6 unique positive integers.")
+
+        # Serialize tag batches so two overlapping screen loads cannot send the
+        # same untagged problem to the AI before its first tag is persisted.
+        with tag_generation_lock:
+            problems = [find_problem(problem_id) for problem_id in problem_ids]
+            untagged = [problem for problem in problems if not problem.get("tags")]
+            generated_by_id = {}
+            provider, used_model = "local", None
+            if untagged:
+                generated = generate_problem_tags(untagged, model=data.get("model"))
+                generated_by_id = {item["problemId"]: item["tag"] for item in generated["tags"]}
+                provider, used_model = generated["provider"], generated["model"]
+                with mutation_lock:
+                    for problem in untagged:
+                        database.set_problem_tags_if_empty(
+                            problem["id"], [generated_by_id[problem["id"]]],
+                        )
+
+            tagged = []
+            for problem_id in problem_ids:
+                current = find_problem(problem_id)
+                tagged.append({"problemId": problem_id, "tags": current.get("tags") or []})
+            return jsonify(success=True, provider=provider, model=used_model, tags=tagged)
 
     # Requirement (1): Generate test cases by the limitation of the problem
     @app.post("/api/llm/generate-testcases")

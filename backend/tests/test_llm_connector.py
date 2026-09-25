@@ -18,6 +18,7 @@ from backend.app import create_app
 from backend.llm import (
     chat_response,
     generate_ai_problem,
+    generate_problem_tags,
     generate_test_cases_by_limitations,
     get_thinking_hints,
     get_model_info,
@@ -308,6 +309,35 @@ class GatewayConnectorTests(unittest.TestCase):
         self.reply = json.dumps(cases)
         with self.assertRaises(LLMError):
             generate_test_cases_by_limitations(self.problem)
+
+    def test_tag_generation_batches_titles_and_only_200_description_characters(self):
+        self.reply = json.dumps([{"problemId": 7, "tag": "Math"}])
+        result = generate_problem_tags([{
+            "id": 7,
+            "title": "Long addition",
+            "problem_statements": "A" * 200 + "SECRET_TAIL",
+        }])
+        self.assertEqual(result["tags"], [{"problemId": 7, "tag": "Math"}])
+        completion = next(call[2] for call in self.calls if call[0] == "POST")
+        prompt = completion["messages"][-1]["content"]
+        self.assertIn("Long addition", prompt)
+        self.assertIn("A" * 200, prompt)
+        self.assertNotIn("SECRET_TAIL", prompt)
+
+    def test_tag_generation_requires_one_result_for_each_unique_problem(self):
+        problems = [
+            {"id": 1, "title": "One", "problem_statements": "First"},
+            {"id": 2, "title": "Two", "problem_statements": "Second"},
+        ]
+        for reply in (
+            [{"problemId": 1, "tag": "Math"}],
+            [{"problemId": 1, "tag": "Math"}, {"problemId": 1, "tag": "Array"}],
+            [{"problemId": 1, "tag": "Math"}, {"problemId": 3, "tag": "Array"}],
+        ):
+            with self.subTest(reply=reply):
+                self.reply = json.dumps(reply)
+                with self.assertRaises(LLMError):
+                    generate_problem_tags(problems)
 
     def test_mock_provider_is_explicit_and_makes_no_network_calls(self):
         with patch.dict(os.environ, {"LLM_PROVIDER": "mock"}):

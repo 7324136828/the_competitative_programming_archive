@@ -45,6 +45,35 @@ class StorageTests(unittest.TestCase):
         reopened = DraftStore(Database(self.database.path), self.store.directory)
         self.assertEqual(reopened.get(self.problem_id, "py"), saved)
 
+    def test_legacy_default_algorithm_tags_are_cleared_only_once(self):
+        legacy_path = self.root / "legacy-tags.sqlite"
+        connection = sqlite3.connect(legacy_path)
+        try:
+            connection.execute(
+                """CREATE TABLE problems (
+                    id INTEGER PRIMARY KEY, title TEXT NOT NULL, problem_statements TEXT NOT NULL,
+                    sample_input_output TEXT DEFAULT '[]', hints TEXT DEFAULT '[]',
+                    language TEXT DEFAULT 'en', difficulty TEXT DEFAULT 'Medium',
+                    tags TEXT DEFAULT '[]', source TEXT, created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )"""
+            )
+            connection.execute(
+                "INSERT INTO problems (title, problem_statements, tags) VALUES (?, ?, ?)",
+                ("Legacy", "Needs classification", json.dumps(["Algorithm"])),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+        migrated = Database(legacy_path)
+        migrated.initialize()
+        self.assertEqual(migrated.get_problem(1)["tags"], [])
+
+        explicit = migrated.create_problem({
+            "title": "Explicit", "problem_statements": "Already classified", "tags": ["Algorithm"],
+        })
+        Database(legacy_path).initialize()
+        self.assertEqual(migrated.get_problem(explicit["id"])["tags"], ["Algorithm"])
+
     def test_empty_code_is_saved_and_languages_and_problems_are_independent(self):
         other = self.database.create_problem({"title": "Other", "problem_statements": "Something else"})
         self.store.save(self.problem_id, "python", "", 0)
