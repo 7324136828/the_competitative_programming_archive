@@ -2,6 +2,7 @@
 
 import os
 import signal
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -39,7 +40,7 @@ class RootRunTests(LauncherTestCase):
     def test_ctrl_c_stops_only_codejudge_services(self):
         stop, ports, backend, frontend = self.main_environment()
         self.assertEqual(launcher.main(), 0)
-        self.assertEqual([call.args[0] for call in stop.call_args_list], [frontend, backend])
+        self.assertEqual([call.args[0] for call in stop.call_args_list], [backend, frontend])
         self.assertEqual(ports.call_args_list[0].args[1], set())
         self.assertEqual(ports.call_args_list[1].args[1], {3001})
         self.assertEqual(len(launcher.subprocess.Popen.call_args_list), 2)
@@ -50,14 +51,36 @@ class RootRunTests(LauncherTestCase):
         launcher.time.sleep.side_effect = lambda _: signal.raise_signal(signal.SIGTERM)
         self.assertEqual(launcher.main(), 0)
         self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
-        self.assertEqual([call.args[0] for call in stop.call_args_list], [frontend, backend])
+        self.assertEqual([call.args[0] for call in stop.call_args_list], [backend, frontend])
 
     def test_backend_exit_stops_frontend(self):
         stop, _, backend, frontend = self.main_environment()
         backend.poll.return_value = 2
         launcher.time.sleep.side_effect = None
         self.assertEqual(launcher.main(), 2)
-        self.assertEqual([call.args[0] for call in stop.call_args_list], [frontend, backend])
+        self.assertEqual([call.args[0] for call in stop.call_args_list], [backend, frontend])
+
+    def test_windows_shutdown_bounds_taskkill_wait(self):
+        process = MagicMock(pid=1234)
+        process.poll.return_value = None
+        with patch.object(launcher.os, "name", "nt"), patch.object(
+            launcher.subprocess, "run"
+        ) as taskkill:
+            launcher.stop(process)
+        self.assertEqual(taskkill.call_args.kwargs["timeout"], 5)
+        process.wait.assert_called_once_with(timeout=5)
+
+    def test_windows_shutdown_kills_child_if_taskkill_hangs(self):
+        process = MagicMock(pid=1234)
+        process.poll.return_value = None
+        with patch.object(launcher.os, "name", "nt"), patch.object(
+            launcher.subprocess,
+            "run",
+            side_effect=subprocess.TimeoutExpired("taskkill", 5),
+        ):
+            launcher.stop(process)
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=5)
 
     def test_dotenv_keeps_terminal_precedence(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(

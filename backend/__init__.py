@@ -1,2 +1,2 @@
 """Sample Python backend package."""
-"""CodeJudge Backend Package."""
+"""The Study Platform backend package."""

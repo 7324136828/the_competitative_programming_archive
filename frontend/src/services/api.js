@@ -160,7 +160,7 @@ export async function exportSubmissions() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'codejudge-submissions.zip';
+  link.download = 'study-platform-submissions.zip';
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -264,4 +264,31 @@ export async function saveProblem(problemData) {
     body: JSON.stringify(problemData)
   });
   return readResponse(res, 'Failed to create problem');
+}
+
+export async function importStories(payload) {
+  const res = await fetch(`${API_BASE}/issues/import-stories`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  return readResponse(res, 'Failed to import stories');
+}
+
+export async function submitCodingResult(issueId, payload) {
+  const res = await fetch(`${API_BASE}/issues/${encodeURIComponent(issueId)}/submission`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  return readResponse(res, 'Failed to record coding submission');
+}
+
+export async function aiGenerateStory(payload) {
+  const res = await fetch(`${API_BASE}/ai/generate-story`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  return readResponse(res, 'Failed to generate story with AI');
 }

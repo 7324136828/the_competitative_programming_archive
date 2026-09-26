@@ -59,7 +59,7 @@ def seed_database(database: Database, source: Path | str = ROOT / "problem.json"
 
 
 if __name__ == "__main__":
-    db = Database(os.environ.get("DATABASE_PATH") or default_database_path())
+    db = Database(os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH") or default_database_path())
     db.initialize()
     inserted = seed_database(db)
     print(f"Seeded {inserted} problems. Database contains {db.count()} problems.")

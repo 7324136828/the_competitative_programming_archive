@@ -10,7 +10,7 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      content: 'Hello! I am your CodeJudge AI Assistant. I can help explain algorithmic strategies, guide you through programming thinking steps, generate boundary test cases, or review and debug your code. What would you like to explore?'
+      content: 'Hello! I am your Study Platform AI Assistant. I can help explain algorithmic strategies, guide you through programming thinking steps, generate boundary test cases, or review and debug your code. What would you like to explore?'
     }
   ]);
   const [input, setInput] = useState('');
@@ -178,7 +178,7 @@ export default function ChatDrawer({ isOpen, onClose, currentProblem, currentCod
               alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start'
             }}>
               {m.role === 'user' ? <User size={12} /> : <Bot size={12} color="#ffa116" />}
-              <span>{m.role === 'user' ? 'You' : 'CodeJudge AI'}</span>
+              <span>{m.role === 'user' ? 'You' : 'Study Platform AI'}</span>
             </div>
             <div style={{
               backgroundColor: m.role === 'user' ? '#ffa116' : '#282828',

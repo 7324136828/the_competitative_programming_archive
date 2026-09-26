@@ -85,14 +85,22 @@ class APITestCase(unittest.TestCase):
                 self.assertEqual(body["languages"], available)
 
     def test_json_import_accepts_array_envelope_and_single_problem(self):
-        for payload in ([problem("Array")], {"problems": [problem("Envelope")]}, problem("Single")):
+        for payload in (
+            [problem("Array")],
+            {"problems": [problem("Envelope")]},
+            {"stories": [problem("Story envelope")]},
+            problem("Single"),
+        ):
             with self.subTest(payload=payload):
                 body = self.assert_success(self.client.post("/api/problems/upload", json=payload))
                 self.assertEqual(body["insertedCount"], 1)
-        self.assertEqual(self.database.count(), 3)
+        self.assertEqual(self.database.count(), 4)
         restarted = create_app(self.config).test_client()
         body = self.assert_success(restarted.get("/api/problems"))
-        self.assertEqual([entry["title"] for entry in body["problems"]], ["Array", "Envelope", "Single"])
+        self.assertEqual(
+            [entry["title"] for entry in body["problems"]],
+            ["Array", "Envelope", "Story envelope", "Single"],
+        )
 
     def test_multipart_import_preserves_unicode_and_decodes_legacy_arrays(self):
         record = problem("Сумма", language="ru")
@@ -100,13 +108,17 @@ class APITestCase(unittest.TestCase):
         record["tags"] = json.dumps(record["tags"])
         record["sample_input_output"] = json.dumps(record["sample_input_output"])
         content = json.dumps({"problems": [record]}, ensure_ascii=False).encode("utf-8-sig")
-        body = self.assert_success(
-            self.client.post(
-                "/api/problems/upload",
-                data={"file": (BytesIO(content), "problems.json")},
-                content_type="multipart/form-data",
+        with self.assertLogs("uvicorn.error", level="INFO") as logs:
+            body = self.assert_success(
+                self.client.post(
+                    "/api/problems/upload",
+                    data={"file": (BytesIO(content), "problems.json")},
+                    content_type="multipart/form-data",
+                )
             )
-        )
+        output = "\n".join(logs.output)
+        self.assertIn("Problem archive processing entry 1/1:", output)
+        self.assertIn("Problem archive import complete", output)
         self.assertEqual(body["totalNow"], 1)
         imported = self.assert_success(self.client.get("/api/problems/1"))["problem"]
         self.assertEqual(imported["title"], record["title"])

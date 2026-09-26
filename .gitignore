@@ -180,3 +180,4 @@ data/*.db
 temp_uploads/
 data/workspace/
 
+repo

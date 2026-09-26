@@ -110,7 +110,7 @@ test('global history opens code and test results and downloads all submissions a
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export all submissions (ZIP)', exact: true }).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe('codejudge-submissions.zip');
+  expect(download.suggestedFilename()).toBe('study-platform-submissions.zip');
   const zip = await readFile((await download.path())!);
   expect(zip.subarray(0, 2).toString()).toBe('PK');
   expect(zip.length).toBeGreaterThan(100);

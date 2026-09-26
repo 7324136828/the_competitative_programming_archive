@@ -1,11 +1,11 @@
 # Models and submission status
 
 Start The Connector backend (normally `http://127.0.0.1:8301`) and activate a
-configuration in its library. CodeJudge discovers the active configuration IDs
+configuration in its library. The Study Platform discovers the active configuration IDs
 from `GET /v1/models` before making requests to `POST /v1/chat/completions`.
 Upstream provider credentials and routing belong in The Connector.
 
-CodeJudge settings in `.env`:
+The Study Platform settings in `.env`:
 
 ```dotenv
 LLM_PROVIDER=the_connector
@@ -15,7 +15,7 @@ LLM_TIMEOUT_SECONDS=120
 ```
 
 Leave `LLM_MODEL` blank to select the first discovered configuration, or set it
-to an active library `model_id`. Restart the CodeJudge backend after changing
+to an active library `model_id`. Restart The Study Platform backend after changing
 these settings. The UI fetches `/api/llm/models` and displays the selected ID.
 This is a routing configuration alias; its underlying provider/model may change
 when The Connector uses a fallback route.
@@ -167,12 +167,12 @@ Install the updated backend dependencies with your project Python:
 ```
 
 Start The Connector before requesting new narration. It owns the private Kokoro
-service and exposes readiness at `GET /api/speech/health`. CodeJudge never calls
+service and exposes readiness at `GET /api/speech/health`. The Study Platform never calls
 Kokoro directly. The frontend reports Connector validation, availability, and
 generation errors and offers a retry; cached MP3s remain available while The
 Connector is stopped.
 
-CodeJudge settings in `.env` (restart its backend after changing them):
+The Study Platform settings in `.env` (restart its backend after changing them):
 
 ```dotenv
 WORKSPACE_STORAGE_DIR=
@@ -182,7 +182,7 @@ CONNECTOR_SPEECH_TIMEOUT_SECONDS=180
 
 Configure voice, language, speed, model dependencies, and CPU/CUDA selection in
 The Connector, then restart The Connector. Its public speech contract accepts
-only `{ "content": "..." }`, so CodeJudge does not override those settings per
-request. Clear CodeJudge's saved audio after changing Connector speech settings
+only `{ "content": "..." }`, so The Study Platform does not override those settings per
+request. Clear The Study Platform's saved audio after changing Connector speech settings
 if you want existing narration regenerated. The player reads the saved problem
 description, including its title.
