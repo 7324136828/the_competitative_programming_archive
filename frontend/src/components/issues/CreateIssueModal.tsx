@@ -3,7 +3,7 @@ import { X, AlertCircle } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext.js';
 import { useAuth } from '../../context/AuthContext.js';
 import { api } from '../../api/client.js';
-import { IssueType, IssuePriority, Sprint, Version } from '../../types/index.js';
+import { IssueType, IssuePriority, Sprint, Version, StoryType } from '../../types/index.js';
 import { TypeIcon, PriorityIcon } from '../common/Badge.js';
 
 export const CreateIssueModal: React.FC = () => {
@@ -12,7 +12,7 @@ export const CreateIssueModal: React.FC = () => {
 
   const [projectId, setProjectId] = useState(currentProject?.id || projects[0]?.id || '');
   const [type, setType] = useState<IssueType>('Story');
-  const [storyType, setStoryType] = useState<'coding' | 'learning' | 'non-coding'>('coding');
+  const [storyType, setStoryType] = useState<StoryType>('coding');
   const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
   const [parentId, setParentId] = useState<string>('');
   const [parentOptions, setParentOptions] = useState<any[]>([]);
@@ -170,6 +170,7 @@ export const CreateIssueModal: React.FC = () => {
                 >
                   <option value="coding">Coding Problem (CodeJudge)</option>
                   <option value="learning">Learning Guide & Concepts</option>
+                  <option value="study">Study Set (Interactive Learning)</option>
                   <option value="non-coding">Non-Coding / System Design</option>
                 </select>
               </div>

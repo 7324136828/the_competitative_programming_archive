@@ -212,7 +212,7 @@ export const CodingActivity: React.FC<CodingActivityProps> = ({
           };
           setExecutionStatus(labels[job.phase] || job.status || 'Judging submission...');
         }
-      });
+      } as any);
 
       if (controller.signal.aborted) return;
       if (res.success) {
@@ -384,6 +384,8 @@ export const CodingActivity: React.FC<CodingActivityProps> = ({
         currentProblem={problem}
         currentCode={draft.code}
         currentLanguage={language}
+        onApplyTestCases={(cases: any) => setTestCases((prev: any[]) => [...prev, ...(Array.isArray(cases) ? cases : [cases])])}
+        onApplyThinkingSteps={() => {}}
       />
 
       {/* Translate Modal */}

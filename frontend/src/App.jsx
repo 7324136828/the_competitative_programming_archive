@@ -22,6 +22,8 @@ import { ProjectSettingsView } from './components/settings/ProjectSettingsView';
 import { MetricsView } from './components/metrics/MetricsView';
 import { AiAssistantView } from './components/ai/AiAssistantView';
 import ProblemList from './components/ProblemList';
+import { StudySetApp } from './components/studyset/StudySetApp';
+import { LoadStudySetModal } from './components/studyset/LoadStudySetModal';
 import { fetchProblem } from './services/api';
 import { api } from './api/client';
 
@@ -29,6 +31,7 @@ const VALID_TABS = [
   'board',
   'backlog',
   'problems',
+  'studyset',
   'timeline',
   'crossteam',
   'releases',
@@ -58,6 +61,10 @@ const MainApp = () => {
     closeImportStories,
     isAiStoryOpen,
     closeAiStory,
+    isLoadStudySetOpen,
+    closeLoadStudySet,
+    activeStudySetId,
+    setActiveStudySetId,
     refreshKey,
     triggerRefresh,
   } = useProject();
@@ -178,6 +185,12 @@ const MainApp = () => {
               />
             </div>
           )}
+          {activeTab === 'studyset' && (
+            <StudySetApp
+              initialStudySetId={activeStudySetId}
+              onOpenStory={openIssueDetail}
+            />
+          )}
           {activeTab === 'timeline' && <TimelineGanttView />}
           {activeTab === 'crossteam' && <CrossTeamPlanView />}
           {activeTab === 'releases' && <ReleasesView />}
@@ -196,6 +209,18 @@ const MainApp = () => {
       <IssueDetailModal onOpenProblem={handleSelectProblemFromList} />
       <ImportStoriesModal isOpen={isImportStoriesOpen} onClose={closeImportStories} />
       <AiStoryModal isOpen={isAiStoryOpen} onClose={closeAiStory} />
+      <LoadStudySetModal
+        isOpen={isLoadStudySetOpen}
+        onClose={closeLoadStudySet}
+        onSelectStudySet={(id) => {
+          setActiveStudySetId(id);
+          setActiveTab('studyset');
+        }}
+        onOpenStory={(storyId) => {
+          closeLoadStudySet();
+          openIssueDetail(storyId);
+        }}
+      />
 
       {/* Extensible Activity Screen */}
       {activeActivityIssue && (

@@ -14,7 +14,7 @@ import { Issue, WorkflowStatus } from '../../types/index.js';
 import { TypeIcon, PriorityIcon, StoryTypeBadge } from '../common/Badge.js';
 
 export const KanbanScrumBoard: React.FC = () => {
-  const { currentProject, openIssueDetail, openActivity, refreshKey, triggerRefresh } = useProject();
+  const { currentProject, openIssueDetail, openActivity, openStudySet, refreshKey, triggerRefresh } = useProject();
   const { currentUser, canEdit } = useAuth();
 
   const [issues, setIssues] = useState<Issue[]>([]);
@@ -240,17 +240,25 @@ export const KanbanScrumBoard: React.FC = () => {
                           {issue.key}
                         </span>
 
-                        {/* Direct Activity Launcher */}
+                        {/* Direct Activity / Study Set Launcher */}
                         <button
                           type="button"
                           onClick={(e) => {
                             e.stopPropagation();
-                            openActivity(issue);
+                            if (issue.story_type === 'study' && issue.study_set_id) {
+                              openStudySet(issue.study_set_id);
+                            } else {
+                              openActivity(issue);
+                            }
                           }}
-                          className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 hover:bg-blue-100 text-[#0052CC] transition ml-1"
-                          title="Open Activity Screen"
+                          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition ml-1 ${
+                            issue.story_type === 'study'
+                              ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
+                              : 'bg-blue-50 hover:bg-blue-100 text-[#0052CC]'
+                          }`}
+                          title={issue.story_type === 'study' ? 'Open Study Set' : 'Open Activity Screen'}
                         >
-                          Activity ↗
+                          {issue.story_type === 'study' ? 'Study Set ↗' : 'Activity ↗'}
                         </button>
                       </div>
 

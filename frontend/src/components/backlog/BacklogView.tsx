@@ -18,7 +18,7 @@ import { Issue, Sprint } from '../../types/index.js';
 import { TypeIcon, PriorityIcon, StatusBadge, StoryTypeBadge } from '../common/Badge.js';
 
 export const BacklogView: React.FC = () => {
-  const { currentProject, openIssueDetail, openCreateModal, openActivity, refreshKey, triggerRefresh } = useProject();
+  const { currentProject, openIssueDetail, openCreateModal, openActivity, openStudySet, refreshKey, triggerRefresh } = useProject();
   const { canEdit } = useAuth();
 
   const [sprints, setSprints] = useState<Sprint[]>([]);
@@ -225,12 +225,20 @@ export const BacklogView: React.FC = () => {
           type="button"
           onClick={(e) => {
             e.stopPropagation();
-            openActivity(issue);
+            if (issue.story_type === 'study' && issue.study_set_id) {
+              openStudySet(issue.study_set_id);
+            } else {
+              openActivity(issue);
+            }
           }}
-          className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-50 hover:bg-blue-100 text-[#0052CC] transition shrink-0"
-          title="Open Activity Screen"
+          className={`px-1.5 py-0.5 rounded text-[10px] font-semibold transition shrink-0 ${
+            issue.story_type === 'study'
+              ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-700'
+              : 'bg-blue-50 hover:bg-blue-100 text-[#0052CC]'
+          }`}
+          title={issue.story_type === 'study' ? 'Open Study Set' : 'Open Activity Screen'}
         >
-          Activity ↗
+          {issue.story_type === 'study' ? 'Study Set ↗' : 'Activity ↗'}
         </button>
         <span className="text-gray-900 font-medium truncate">{issue.summary}</span>
       </div>

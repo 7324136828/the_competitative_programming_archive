@@ -306,6 +306,14 @@ def get_issue_for_problem(problem_id: int):
     return issue
 
 
+@router.get('/by-study-set/{study_set_id}')
+def get_issue_for_study_set(study_set_id: str):
+    issue = svc.get_issue_by_study_set_id(study_set_id)
+    if not issue:
+        return JSONResponse({'error': 'No story is linked to this study set'}, 404)
+    return issue
+
+
 @router.post('/from-problem/{problem_id}', status_code=201)
 def ensure_issue_for_problem(problem_id: int, request: Request, body: dict | None = None):
     user_id = resolve_acting_user_id(request)

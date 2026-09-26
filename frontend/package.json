@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "test": "node --test src/services/api.test.js src/services/draftStore.test.js src/utils/sourceFiles.test.js src/utils/richContent.test.js src/services/jiraCp.test.js",
+    "test": "node --test src/services/api.test.js src/services/draftStore.test.js src/utils/sourceFiles.test.js src/utils/richContent.test.js src/services/jiraCp.test.js src/services/studySetApi.test.js",
     "preview": "vite preview"
   },
   "dependencies": {

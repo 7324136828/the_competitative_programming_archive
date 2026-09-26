@@ -15,6 +15,7 @@ import { StatusBadge, PriorityIcon } from '../common/Badge';
 import { CodingActivity } from './CodingActivity';
 import { LearningActivity } from './LearningActivity';
 import { NonCodingActivity } from './NonCodingActivity';
+import { StudySetActivity } from './StudySetActivity';
 
 export interface ActivityHandlerProps {
   issue: Issue;
@@ -27,6 +28,7 @@ export const ACTIVITY_REGISTRY: Record<string, React.ComponentType<ActivityHandl
   coding: CodingActivity,
   learning: LearningActivity,
   'non-coding': NonCodingActivity,
+  study: StudySetActivity,
 };
 
 export function registerActivityHandler(type: string, component: React.ComponentType<ActivityHandlerProps>) {

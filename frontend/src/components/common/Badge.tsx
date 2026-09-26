@@ -103,6 +103,14 @@ export const StoryTypeBadge: React.FC<{ storyType?: StoryType; className?: strin
       </span>
     );
   }
+  if (storyType === 'study') {
+    return (
+      <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-800 border border-emerald-300 ${className}`}>
+        <BookOpen className="w-3 h-3 text-emerald-600" />
+        <span>Study</span>
+      </span>
+    );
+  }
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-purple-50 text-purple-700 border border-purple-200 ${className}`}>
       <FileText className="w-3 h-3 text-purple-600" />

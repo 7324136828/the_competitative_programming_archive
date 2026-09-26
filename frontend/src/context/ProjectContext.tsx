@@ -22,6 +22,12 @@ interface ProjectContextType {
   isAiStoryOpen: boolean;
   openAiStory: () => void;
   closeAiStory: () => void;
+  isLoadStudySetOpen: boolean;
+  openLoadStudySet: () => void;
+  closeLoadStudySet: () => void;
+  activeStudySetId: string | null;
+  setActiveStudySetId: (id: string | null) => void;
+  openStudySet: (studySetId?: string | null) => void;
   refreshKey: number;
   triggerRefresh: () => void;
   isLoading: boolean;
@@ -39,8 +45,22 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [activeActivityIssue, setActiveActivityIssue] = useState<Issue | null>(null);
   const [isImportStoriesOpen, setIsImportStoriesOpen] = useState(false);
   const [isAiStoryOpen, setIsAiStoryOpen] = useState(false);
+  const [isLoadStudySetOpen, setIsLoadStudySetOpen] = useState(false);
+  const [activeStudySetId, setActiveStudySetId] = useState<string | null>(() => {
+    return localStorage.getItem('active_study_set_id') || null;
+  });
   const [refreshKey, setRefreshKey] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
+
+  const openLoadStudySet = () => setIsLoadStudySetOpen(true);
+  const closeLoadStudySet = () => setIsLoadStudySetOpen(false);
+  const openStudySet = (studySetId?: string | null) => {
+    if (studySetId) {
+      setActiveStudySetId(studySetId);
+      localStorage.setItem('active_study_set_id', studySetId);
+    }
+    window.location.hash = '#studyset';
+  };
 
   const fetchProjects = async (selectId?: string) => {
     try {
@@ -125,6 +145,12 @@ export const ProjectProvider: React.FC<{ children: React.ReactNode }> = ({ child
         isAiStoryOpen,
         openAiStory,
         closeAiStory,
+        isLoadStudySetOpen,
+        openLoadStudySet,
+        closeLoadStudySet,
+        activeStudySetId,
+        setActiveStudySetId,
+        openStudySet,
         refreshKey,
         triggerRefresh,
         isLoading,

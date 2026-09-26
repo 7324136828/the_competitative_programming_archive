@@ -11,7 +11,8 @@ import {
   HelpCircle,
   ExternalLink,
   Bot,
-  Settings
+  Settings,
+  BookOpen
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { useProject } from '../../context/ProjectContext.js';
@@ -28,7 +29,7 @@ interface NavbarProps {
 
 export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) => {
   const { currentUser, users, switchUser, isAdmin, isViewer, refreshUsers } = useAuth();
-  const { projects, currentProject, switchProject, openCreateModal, openIssueDetail, reloadProjects, openImportStories, openAiStory } = useProject();
+  const { projects, currentProject, switchProject, openCreateModal, openIssueDetail, reloadProjects, openImportStories, openAiStory, openLoadStudySet } = useProject();
 
   const [isProjectDropdownOpen, setIsProjectDropdownOpen] = useState(false);
   const [isPersonaDropdownOpen, setIsPersonaDropdownOpen] = useState(false);
@@ -263,6 +264,16 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
         >
           <Sparkles className="w-3.5 h-3.5 text-amber-200" />
           <span className="hidden md:inline">AI Story</span>
+        </button>
+
+        {/* Load Study Set Button */}
+        <button
+          onClick={openLoadStudySet}
+          className="flex items-center space-x-1 px-2.5 py-1.5 rounded text-xs font-semibold bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-700 shadow-xs transition"
+          title="Load and switch Study Sets"
+        >
+          <BookOpen className="w-3.5 h-3.5 text-emerald-600" />
+          <span className="hidden md:inline">Study Set</span>
         </button>
       </div>
 

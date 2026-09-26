@@ -16,7 +16,8 @@ import {
   ChevronDown,
   Calendar,
   AlertCircle,
-  FileText
+  FileText,
+  BookOpen
 } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext.js';
 import { useAuth } from '../../context/AuthContext.js';
@@ -40,7 +41,7 @@ interface IssueDetailModalProps {
 }
 
 export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProblem }) => {
-  const { selectedIssueId, closeIssueDetail, openIssueDetail, triggerRefresh, refreshKey, openActivity } = useProject();
+  const { selectedIssueId, closeIssueDetail, openIssueDetail, triggerRefresh, refreshKey, openActivity, openStudySet } = useProject();
   const { users, currentUser, canEdit } = useAuth();
 
   const [issue, setIssue] = useState<Issue | null>(null);
@@ -466,6 +467,35 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
               </div>
             )}
 
+            {/* Associated Study Set Banner */}
+            {(issue.story_type === 'study' || issue.study_set_id) && (
+              <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between">
+                <div>
+                  <div className="text-xs font-bold text-emerald-900 flex items-center space-x-1.5">
+                    <BookOpen className="w-4 h-4 text-emerald-600" />
+                    <span>Associated Study Set {issue.study_set ? `· ${issue.study_set.title || issue.study_set.name}` : ''}</span>
+                  </div>
+                  <div className="text-[11px] text-emerald-700 mt-0.5">
+                    Access 9 learning viewers: flashcards, quizzes, podcast studio, slides, mind maps, and interactive Q&A.
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    closeIssueDetail();
+                    if (issue.study_set_id) {
+                      openStudySet(issue.study_set_id);
+                    } else {
+                      window.location.hash = '#studyset';
+                    }
+                  }}
+                  className="ml-3 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shrink-0 shadow-xs flex items-center space-x-1"
+                >
+                  <span>Open Study Set</span>
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+
             {/* Interactive Activity Banner */}
             <div className="p-3.5 bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl flex items-center justify-between">
               <div className="space-y-0.5">
@@ -477,6 +507,8 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
                     ? 'Code editor, test case runner, hints, and speech narration. Status changes to "Done" depend on Accepted code submissions.'
                     : issue.story_type === 'learning'
                     ? 'Interactive study guide, learning checklist, speech narration, and AI concept tutor.'
+                    : issue.story_type === 'study'
+                    ? 'Interactive Study Set viewer hub, progress tracker, and audio learning tools.'
                     : 'System design requirements, architecture proposal canvas, and AI design critique.'}
                 </p>
               </div>

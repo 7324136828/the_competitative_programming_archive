@@ -21,7 +21,7 @@ export interface Project {
 }
 
 export type IssueType = 'Story' | 'Bug' | 'Task' | 'Epic' | 'Feature' | 'Subtask';
-export type StoryType = 'coding' | 'learning' | 'non-coding';
+export type StoryType = 'coding' | 'learning' | 'study' | 'non-coding';
 export type IssuePriority = 'Lowest' | 'Low' | 'Medium' | 'High' | 'Highest';
 
 export interface IssueLink {
@@ -99,6 +99,14 @@ export interface Issue {
     source?: string;
     archive_url?: string;
     audio?: { url?: string | null; status: string; updated_at?: string } | null;
+  } | null;
+  study_set_id?: string | null;
+  study_set?: {
+    id: string;
+    name: string;
+    title?: string;
+    description?: string;
+    path?: string;
   } | null;
   sample_input_output?: Array<{ input: string; output: string }>;
   hints?: string[];

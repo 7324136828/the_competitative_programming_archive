@@ -16,6 +16,7 @@ from .routers import (
     projects, issues, sprints, workflows, automation, dev, filters, dashboard,
     versions, custom_fields, attachments, users, metrics, ai, activity, admin,
 )
+from ..study.router import router as study_router
 
 SERVER_DIR = Path(__file__).resolve().parent.parent
 CLIENT_DIST = (SERVER_DIR.parent / 'client' / 'dist').resolve()
@@ -73,6 +74,7 @@ app.include_router(ai.router, prefix='/api/ai')
 app.include_router(activity.router, prefix='/api/activity')
 app.include_router(admin.router, prefix='/api/admin')
 app.include_router(users.router, prefix='/api')
+app.include_router(study_router, prefix='/api')
 
 
 @app.get('/api/health')

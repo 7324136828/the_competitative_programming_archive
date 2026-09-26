@@ -17,7 +17,8 @@ import {
   GitBranch,
   Sparkles,
   Gauge,
-  Code2
+  Code2,
+  BookOpen
 } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext.js';
 
@@ -33,7 +34,8 @@ export type NavTab =
   | 'settings'
   | 'ai'
   | 'metrics'
-  | 'problems';
+  | 'problems'
+  | 'studyset';
 
 interface SidebarProps {
   activeTab: NavTab;
@@ -57,6 +59,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         { id: 'board', label: 'Active Board', icon: Kanban, tag: 'J-08' },
         { id: 'backlog', label: 'Backlog', icon: ListTodo, tag: 'J-05/07' },
         { id: 'problems', label: 'Problem Archive', icon: Code2, tag: 'CP' },
+        { id: 'studyset', label: 'Study Set', icon: BookOpen, tag: 'SS' },
         { id: 'timeline', label: 'Roadmap Timeline', icon: Calendar, tag: 'J-17' },
       ],
     },

@@ -137,3 +137,16 @@ Change of status for story related to coding will depend on completely by submis
 User should be allowed to import stories like what we have done before for coding problem. 
 
 We can also create coding/non-coding story by using ai as well. 
+
+## 3
+
+Can you integrate the code with the merging project skill provided 
+to merge the functionality of study set into the competitative programming archive?
+
+Since we can get kokoro from the_connector, we do not need kokoro from repo we can integrate directly with the_connector's kokoro.
+
+Similar to problem archive, we will have a tab called "study set", which will load the similar UI from repo (which the user can choose the study set).
+
+We should also have a button on the top that will allow user to load the study set. 
+
+For each study set, we can associated with a jira story as well. And for a jira story that is of type "study", it will redirect/load the study set for the "study set" tab.

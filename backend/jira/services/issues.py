@@ -66,6 +66,13 @@ def get_issue_by_problem_id(problem_id: int | str):
     return get_issue_by_id(row['id']) if row else None
 
 
+def get_issue_by_study_set_id(study_set_id: str):
+    if not study_set_id:
+        return None
+    row = db.q1('SELECT id FROM issues WHERE study_set_id = ? LIMIT 1', str(study_set_id))
+    return get_issue_by_id(row['id']) if row else None
+
+
 def generate_issue_key(project_id: str) -> str:
     project = db.q1('SELECT key FROM projects WHERE id = ?', project_id)
     if not project:
@@ -141,8 +148,8 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
                  id, key, project_id, type, story_type, summary, description, status, priority,
                  difficulty, assignee_id, reporter_id, parent_id, sprint_id, version_id,
                  rank, story_points, start_date, due_date, problem_id, sample_io_json,
-                 hints_json, tags_json, submission_status, created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 hints_json, tags_json, submission_status, study_set_id, created_at, updated_at
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             issue_id, key, project_id,
             issue_type,
             story_type,
@@ -165,6 +172,7 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
             hints,
             tags,
             submission_status,
+            input.get('study_set_id') or input.get('studySetId') or None,
             now, now,
         )
 
@@ -185,7 +193,7 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
         if include_details:
             return get_issue_by_id(issue_id)
         return db.q1(
-            """SELECT id, key, type, story_type, parent_id, problem_id, status
+            """SELECT id, key, type, story_type, parent_id, problem_id, study_set_id, status
                FROM issues WHERE id = ?""",
             issue_id,
         )
@@ -788,3 +796,19 @@ def get_cross_project_dependencies():
            WHERE src.project_id != tgt.project_id OR l.link_type = 'blocks'
            ORDER BY l.created_at DESC"""
     )
+
+
+def update_issue(issue_id: str, patch: dict):
+    allowed = {'summary', 'description', 'priority', 'study_set_id', 'story_type'}
+    clauses = []
+    params = []
+    for k, v in patch.items():
+        if k in allowed:
+            clauses.append(f"{k} = ?")
+            params.append(v)
+    if not clauses:
+        return get_issue_by_id(issue_id)
+    clauses.append("updated_at = " + SQL_NOW)
+    params.append(issue_id)
+    db.run(f"UPDATE issues SET {', '.join(clauses)} WHERE id = ?", *params)
+    return get_issue_by_id(issue_id)

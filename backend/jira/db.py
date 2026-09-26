@@ -66,6 +66,7 @@ class _DB:
         self._ensure_column('issues', 'hints_json', "hints_json TEXT DEFAULT '[]'")
         self._ensure_column('issues', 'tags_json', "tags_json TEXT DEFAULT '[]'")
         self._ensure_column('issues', 'submission_status', "submission_status TEXT DEFAULT 'Unsolved'")
+        self._ensure_column('issues', 'study_set_id', 'study_set_id TEXT')
         self._ensure_unique_problem_links()
         self._ensure_fts_consistency()
 

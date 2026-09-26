@@ -93,6 +93,7 @@ CREATE TABLE IF NOT EXISTS issues (
   hints_json TEXT DEFAULT '[]',
   tags_json TEXT DEFAULT '[]',
   submission_status TEXT DEFAULT 'Unsolved',
+  study_set_id TEXT,
   created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
   updated_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
 );
