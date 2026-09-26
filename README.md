@@ -1,6 +1,6 @@
-# CodeJudge
+# The Study Platform - Universal Intelligence in Researchs
 
-CodeJudge is a local competitive programming workspace built with React, Vite,
+The Study Platform is a local research, learning, and competitive programming workspace built with React, Vite,
 Flask, and SQLite. Browse problems, write or upload solutions, run test cases,
 and track submissions. AI tools provide hints, explanations, and generated
 problems, with Markdown and LaTeX rendering and saved speech narration through
@@ -18,31 +18,45 @@ Screenshots use demonstration data.
 To refresh these images from the application, run `npm run screenshots` in
 `e2e/`. The capture uses an isolated demonstration database and local AI fixtures.
 
+### Study-set library
+
+Study libraries remain compact until expanded, then show chapter-level study
+sets, Jira story actions, and persisted overall progress.
+
+![The Study Platform study-set library with chapter-level learning sets](docs/screenshots/study-set-library.png)
+
+### Interactive study quiz
+
+Each study set provides dedicated quiz, Q&A, flashcard, mind-map, report,
+slide, data-table, infographic, and podcast views with LaTeX support.
+
+![The Study Platform interactive study quiz with mathematical content](docs/screenshots/study-set-quiz.png)
+
 ### Problem archive
 
 Search and filter the problem collection, with solved problems marked in green.
 
-![CodeJudge problem archive with search, filters, and solved status](docs/screenshots/problem-archive.png)
+![The Study Platform problem archive with search, filters, and solved status](docs/screenshots/problem-archive.png)
 
 ### Solving workspace
 
 Read the statement beside the code editor and test console. Resize or expand
 panels, upload source files, and save drafts automatically.
 
-![CodeJudge solving workspace showing a problem, source code, and test results](docs/screenshots/solving-workspace.png)
+![The Study Platform solving workspace showing a problem, source code, and test results](docs/screenshots/solving-workspace.png)
 
 ### AI assistant
 
 Discuss the current problem with formatted explanations, mathematical formulas,
 and code examples. Read-aloud controls generate saved Connector-backed audio.
 
-![CodeJudge AI assistant displaying a formatted response with math and read-aloud controls](docs/screenshots/ai-assistant.png)
+![The Study Platform AI assistant displaying a formatted response with math and read-aloud controls](docs/screenshots/ai-assistant.png)
 
 ### Submission history
 
 Review verdicts, submitted code, and test results, or export all submissions.
 
-![CodeJudge submission history with verdicts, saved source, and ZIP export](docs/screenshots/submission-history.png)
+![The Study Platform submission history with verdicts, saved source, and ZIP export](docs/screenshots/submission-history.png)
 
 ## Quick start
 
@@ -64,12 +78,12 @@ If a Python virtual environment or Conda environment is already active, setup
 installs into that environment and run uses the same interpreter. Otherwise,
 the scripts create and reuse `.venv` in this project.
 
-Start The Connector before CodeJudge. CodeJudge uses its configured
+Start The Connector before The Study Platform. The Study Platform uses its configured
 `CONNECTOR_BASE_URL` for both LLM requests and speech. The Connector owns the
 Kokoro runtime, voice, language, speed, and device configuration; this project
 does not install or launch a separate speech service.
 
-To open CodeJudge from another device on the same LAN, run:
+To open The Study Platform from another device on the same LAN, run:
 
 ```powershell
 .\run_lan.bat

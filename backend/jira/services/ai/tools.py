@@ -13,6 +13,292 @@ from .search import rank_tickets
 from .normalizer import normalize_ticket
 
 
+def _json_value(value, fallback):
+    if isinstance(value, type(fallback)):
+        return value
+    try:
+        parsed = json.loads(value or '')
+        return parsed if isinstance(parsed, type(fallback)) else fallback
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _short_text(value, limit=2000):
+    text = str(value or '')
+    return text if len(text) <= limit else text[:limit] + '…'
+
+
+def _archive_available():
+    return bool(db.q1("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'problems'"))
+
+
+def _study_context():
+    # Imported lazily so Jira-only processes do not initialize study storage
+    # merely by importing the assistant tool registry.
+    from ....study.state import get_active_workspace_id, get_content_store
+    return get_content_store(), get_active_workspace_id()
+
+
+def _resolve_study_workspace(args):
+    store, active_id = _study_context()
+    workspaces = store.list_all_workspaces()
+    selector = str((args or {}).get('workspace') or '').strip()
+    if not selector:
+        workspace = next((item for item in workspaces if item['id'] == active_id), None)
+        return store, workspace, None if workspace else 'No study sets have been imported'
+
+    folded = selector.casefold()
+    exact = [item for item in workspaces if str(item['id']).casefold() == folded
+             or str(item['name']).casefold() == folded]
+    if len(exact) == 1:
+        return store, exact[0], None
+    partial = [item for item in workspaces if folded in str(item['name']).casefold()]
+    if len(partial) == 1:
+        return store, partial[0], None
+    if len(exact) > 1 or len(partial) > 1:
+        matches = exact or partial
+        return store, None, {
+            'message': f'Study set "{selector}" is ambiguous',
+            'matches': [{'id': item['id'], 'name': item['name']} for item in matches[:10]],
+        }
+    return store, None, f'Study set "{selector}" not found'
+
+
+def _handle_search_coding_problems(args, ctx):
+    if not _archive_available():
+        return {'error': 'The coding problem archive is not initialized'}
+    args = args or {}
+    limit = min(max(int(args.get('limit') or 10), 1), 25)
+    clauses = []
+    params = []
+    query = str(args.get('query') or '').strip()
+    if query:
+        clauses.append('(p.title LIKE ? OR p.problem_statements LIKE ? OR p.tags LIKE ?)')
+        term = f'%{query}%'
+        params.extend([term, term, term])
+    if args.get('difficulty'):
+        clauses.append('lower(p.difficulty) = lower(?)')
+        params.append(str(args['difficulty']))
+    if args.get('language'):
+        clauses.append('lower(p.language) = lower(?)')
+        params.append(str(args['language']))
+    solved = str(args.get('solved') or 'all').lower()
+    if solved not in ('all', 'solved', 'unsolved'):
+        return {'error': 'solved must be all, solved, or unsolved'}
+    accepted = "EXISTS (SELECT 1 FROM submissions s WHERE s.problem_id = p.id AND s.status = 'Accepted' AND s.verified = 1)"
+    if solved == 'solved':
+        clauses.append(accepted)
+    elif solved == 'unsolved':
+        clauses.append(f'NOT {accepted}')
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ''
+    rows = db.q(
+        f"""SELECT p.id, p.title, p.difficulty, p.language, p.tags, p.source,
+                   {accepted} AS is_solved,
+                   (SELECT COUNT(*) FROM submissions s WHERE s.problem_id = p.id) AS attempt_count,
+                   (SELECT s.status FROM submissions s WHERE s.problem_id = p.id ORDER BY s.id DESC LIMIT 1) AS last_verdict,
+                   i.key AS story_key
+            FROM problems p LEFT JOIN issues i ON i.problem_id = p.id
+            {where}
+            ORDER BY CASE WHEN lower(p.title) = lower(?) THEN 0 ELSE 1 END, p.id DESC LIMIT ?""",
+        *params, query, limit,
+    )
+    return {
+        'count': len(rows),
+        'problems': [{
+            'id': row['id'], 'title': row['title'], 'difficulty': row['difficulty'],
+            'language': row['language'], 'tags': _json_value(row.get('tags'), []),
+            'source': row.get('source'), 'solved': bool(row['is_solved']),
+            'attemptCount': row['attempt_count'], 'lastVerdict': row['last_verdict'],
+            'storyKey': row['story_key'],
+        } for row in rows],
+    }
+
+
+def _handle_get_coding_problem(args, ctx):
+    if not _archive_available():
+        return {'error': 'The coding problem archive is not initialized'}
+    problem_id = (args or {}).get('problemId')
+    try:
+        problem_id = int(problem_id)
+    except (TypeError, ValueError):
+        return {'error': 'problemId must be an integer'}
+    problem = db.q1(
+        """SELECT p.*,
+                  EXISTS(SELECT 1 FROM submissions s WHERE s.problem_id = p.id
+                         AND s.status = 'Accepted' AND s.verified = 1) AS is_solved,
+                  i.key AS story_key
+           FROM problems p LEFT JOIN issues i ON i.problem_id = p.id WHERE p.id = ?""",
+        problem_id,
+    )
+    if not problem:
+        return {'error': f'Coding problem {problem_id} not found'}
+    submissions = db.q(
+        """SELECT id, language, status, verified, runtime_ms, error, phase, created_at
+           FROM submissions WHERE problem_id = ? ORDER BY id DESC LIMIT 5""",
+        problem_id,
+    )
+    return {
+        'id': problem['id'], 'title': problem['title'],
+        'statement': _short_text(problem['problem_statements'], 12000),
+        'sampleInputOutput': _json_value(problem.get('sample_input_output'), []),
+        'hints': _json_value(problem.get('hints'), []),
+        'tags': _json_value(problem.get('tags'), []),
+        'difficulty': problem['difficulty'], 'language': problem['language'],
+        'source': problem.get('source'), 'solved': bool(problem['is_solved']),
+        'storyKey': problem['story_key'],
+        'recentAttempts': [{
+            'id': row['id'], 'language': row['language'], 'status': row['status'],
+            'verified': bool(row['verified']), 'runtimeMs': row['runtime_ms'],
+            'error': _short_text(row.get('error'), 500), 'phase': row['phase'],
+            'createdAt': row['created_at'],
+        } for row in submissions],
+    }
+
+
+def _handle_get_coding_history(args, ctx):
+    if not _archive_available():
+        return {'error': 'The coding problem archive is not initialized'}
+    args = args or {}
+    limit = min(max(int(args.get('limit') or 20), 1), 50)
+    clauses = []
+    params = []
+    if args.get('problemId') is not None:
+        try:
+            params.append(int(args['problemId']))
+        except (TypeError, ValueError):
+            return {'error': 'problemId must be an integer'}
+        clauses.append('s.problem_id = ?')
+    if args.get('verdict'):
+        clauses.append('lower(s.status) = lower(?)')
+        params.append(str(args['verdict']))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ''
+    rows = db.q(
+        f"""SELECT s.id, s.problem_id, p.title, s.language, s.status, s.verified,
+                   s.runtime_ms, s.error, s.phase, s.created_at
+            FROM submissions s JOIN problems p ON p.id = s.problem_id
+            {where} ORDER BY s.id DESC LIMIT ?""",
+        *params, limit,
+    )
+    return {
+        'count': len(rows),
+        'attempts': [{
+            'id': row['id'], 'problemId': row['problem_id'], 'title': row['title'],
+            'language': row['language'], 'status': row['status'],
+            'verified': bool(row['verified']), 'runtimeMs': row['runtime_ms'],
+            'error': _short_text(row.get('error'), 500), 'phase': row['phase'],
+            'createdAt': row['created_at'],
+        } for row in rows],
+    }
+
+
+def _handle_list_study_sets(args, ctx):
+    store, active_id = _study_context()
+    uploads = store.list_uploads()
+    study_sets = []
+    for upload in uploads:
+        for workspace in upload['studySets']:
+            story = db.q1('SELECT key FROM issues WHERE id = ?', workspace.get('story_id')) \
+                if workspace.get('story_id') else None
+            study_sets.append({
+                'id': workspace['id'], 'name': workspace['name'],
+                'library': upload['name'], 'originalFilename': upload['originalFilename'],
+                'active': workspace['id'] == active_id, 'storyId': workspace.get('story_id'),
+                'storyKey': story['key'] if story else None,
+                'progress': workspace['progress'],
+            })
+    return {'count': len(study_sets), 'studySets': study_sets}
+
+
+def _handle_get_study_material(args, ctx):
+    args = args or {}
+    store, workspace, error = _resolve_study_workspace(args)
+    if error:
+        return {'error': error['message'], 'matches': error['matches']} if isinstance(error, dict) else {'error': error}
+    kind = str(args.get('kind') or '').strip().lower()
+    manifest = store.manifest(workspace['id'])
+    if not kind:
+        return {'workspace': {'id': workspace['id'], 'name': workspace['name']}, 'kinds': manifest['kinds']}
+    if kind not in manifest['kinds']:
+        return {'error': f'Unknown study material kind "{kind}"', 'allowedKinds': sorted(manifest['kinds'])}
+    filename = str(args.get('file') or '').strip()
+    if not filename:
+        return {
+            'workspace': {'id': workspace['id'], 'name': workspace['name']},
+            'kind': kind, 'documents': manifest['kinds'][kind],
+        }
+    try:
+        body, content_type = store.read_content(workspace['id'], kind, filename)
+    except FileNotFoundError:
+        return {'error': f'{kind} document "{filename}" not found in {workspace["name"]}'}
+    try:
+        text = body.decode('utf-8-sig')
+    except UnicodeDecodeError:
+        return {'error': 'Binary study assets cannot be returned through this text tool'}
+    truncated = len(text) > 16000
+    text = text[:16000]
+    try:
+        content = json.loads(text) if not truncated else text
+    except json.JSONDecodeError:
+        content = text
+    return {
+        'workspace': {'id': workspace['id'], 'name': workspace['name']},
+        'kind': kind, 'file': filename, 'contentType': content_type,
+        'truncated': truncated, 'content': content,
+    }
+
+
+def _handle_get_study_history(args, ctx):
+    args = args or {}
+    store, workspace, error = _resolve_study_workspace(args)
+    if error:
+        return {'error': error['message'], 'matches': error['matches']} if isinstance(error, dict) else {'error': error}
+    activity = str(args.get('activity') or 'all').lower()
+    if activity not in ('all', 'quiz', 'qanda', 'flashcards'):
+        return {'error': 'activity must be all, quiz, qanda, or flashcards'}
+    limit = min(max(int(args.get('limit') or 5), 1), 20)
+    result = {
+        'workspace': {'id': workspace['id'], 'name': workspace['name']},
+        'progress': store.get_study_progress(workspace['id']),
+    }
+    if activity in ('all', 'quiz'):
+        attempts = store.list_quiz_attempts(workspace['id'])[:limit]
+        result['quizAttempts'] = [{
+            'id': item['id'], 'title': item['title'], 'file': item['quizFile'],
+            'score': item['score'], 'total': item['total'], 'completedAt': item['completedAt'],
+            'responses': [{
+                'question': _short_text(response.get('question'), 500),
+                'selectedAnswer': _short_text(response.get('selectedAnswer'), 500),
+                'correctAnswer': _short_text(response.get('correctAnswer'), 500),
+                'correct': bool(response.get('correct')),
+                'explanation': _short_text(response.get('explanation'), 1000),
+            } for response in item.get('responses', [])[:25] if isinstance(response, dict)],
+        } for item in attempts]
+    if activity in ('all', 'qanda'):
+        sessions = store.list_qa_sessions(workspace['id'])[:limit]
+        result['qandaSessions'] = [{
+            'id': item['id'], 'title': item['title'], 'file': item['qaFile'],
+            'status': item['status'], 'updatedAt': item['updatedAt'],
+            'completedAt': item['completedAt'],
+            'responses': [{
+                'question': _short_text(response.get('question'), 750),
+                'answer': _short_text(response.get('answer'), 2000),
+            } for response in item.get('responses', [])[:25] if isinstance(response, dict)
+              and str(response.get('answer') or '').strip()],
+        } for item in sessions]
+    if activity in ('all', 'flashcards'):
+        cards = store.list_flashcard_progress(workspace['id'])[:limit]
+        result['flashcards'] = []
+        for item in cards:
+            pair = _json_value(item.get('cardKey'), [])
+            result['flashcards'].append({
+                'file': item['flashcardFile'],
+                'front': _short_text(pair[0], 1000) if len(pair) > 0 else item['cardKey'],
+                'back': _short_text(pair[1], 2000) if len(pair) > 1 else None,
+                'remembered': item['remembered'], 'updatedAt': item['updatedAt'],
+            })
+    return result
+
+
 def _resolve_project_id(args: dict, ctx: dict):
     if args and args.get('projectKey'):
         p = db.q1('SELECT id FROM projects WHERE key = ? OR id = ?', args['projectKey'], args['projectKey'])
@@ -352,6 +638,99 @@ def _handle_sprint_metrics(args, ctx):
 
 
 TOOLS = [
+    {
+        'name': 'search_coding_problems',
+        'description': 'Search the coding problem archive and show solved state, attempt count, last verdict, and linked story.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'query': {'type': 'string', 'description': 'Title, statement, or tag keywords'},
+                'difficulty': {'type': 'string', 'description': 'Easy, Medium, or Hard'},
+                'language': {'type': 'string'},
+                'solved': {'type': 'string', 'enum': ['all', 'solved', 'unsolved']},
+                'limit': {'type': 'number', 'description': 'Max results (default 10, max 25)'},
+            },
+            'additionalProperties': False,
+        },
+        'mutates': False,
+        'handler': _handle_search_coding_problems,
+        'connectorPrefix': 'archive',
+        'connectorLabel': 'Coding Archive',
+    },
+    {
+        'name': 'get_coding_problem',
+        'description': 'Get a coding problem statement, examples, hints, tags, solved state, linked story, and five recent attempts.',
+        'parameters': {
+            'type': 'object',
+            'properties': {'problemId': {'type': 'number', 'description': 'Coding problem id'}},
+            'required': ['problemId'],
+            'additionalProperties': False,
+        },
+        'mutates': False,
+        'handler': _handle_get_coding_problem,
+        'connectorPrefix': 'archive',
+        'connectorLabel': 'Coding Archive',
+    },
+    {
+        'name': 'get_coding_history',
+        'description': 'Recall recent coding submissions and verdicts, optionally for one problem or verdict.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'problemId': {'type': 'number'},
+                'verdict': {'type': 'string', 'description': 'For example Accepted or Wrong Answer'},
+                'limit': {'type': 'number', 'description': 'Max attempts (default 20, max 50)'},
+            },
+            'additionalProperties': False,
+        },
+        'mutates': False,
+        'handler': _handle_get_coding_history,
+        'connectorPrefix': 'archive',
+        'connectorLabel': 'Coding Archive',
+    },
+    {
+        'name': 'list_study_sets',
+        'description': 'List imported study sets with their library, linked story, active state, and quiz/Q&A/flashcard progress.',
+        'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False},
+        'mutates': False,
+        'handler': _handle_list_study_sets,
+        'connectorPrefix': 'study',
+        'connectorLabel': 'Study Sets',
+    },
+    {
+        'name': 'get_study_material',
+        'description': 'List or read quiz, Q&A, flashcard, report, slide, table, infographic, mind-map, or podcast study material.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'workspace': {'type': 'string', 'description': 'Study-set id or name; defaults to the active study set'},
+                'kind': {'type': 'string', 'description': 'Material kind; omit to list all documents'},
+                'file': {'type': 'string', 'description': 'Document filename; omit to list documents in the kind'},
+            },
+            'additionalProperties': False,
+        },
+        'mutates': False,
+        'handler': _handle_get_study_material,
+        'connectorPrefix': 'study',
+        'connectorLabel': 'Study Sets',
+    },
+    {
+        'name': 'get_study_history',
+        'description': 'Recall persisted quiz answers and correctness, Q&A answers, flashcard memory state, and aggregate progress for a study set.',
+        'parameters': {
+            'type': 'object',
+            'properties': {
+                'workspace': {'type': 'string', 'description': 'Study-set id or name; defaults to the active study set'},
+                'activity': {'type': 'string', 'enum': ['all', 'quiz', 'qanda', 'flashcards']},
+                'limit': {'type': 'number', 'description': 'Max records per activity (default 5, max 20)'},
+            },
+            'additionalProperties': False,
+        },
+        'mutates': False,
+        'handler': _handle_get_study_history,
+        'connectorPrefix': 'study',
+        'connectorLabel': 'Study Sets',
+    },
     {
         'name': 'list_projects',
         'description': 'List all Jira projects with their keys, names, and issue counts.',

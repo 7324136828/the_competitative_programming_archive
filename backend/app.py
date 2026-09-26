@@ -1,4 +1,4 @@
-"""Flask API and frontend host for CodeJudge. Start with `python -m backend.app`."""
+"""Flask API and frontend host for The Study Platform. Start with `python -m backend.app`."""
 
 from __future__ import annotations
 
@@ -475,7 +475,7 @@ def create_app(config: dict | None = None) -> Flask:
         archive = export_submissions(database)
         return send_file(
             archive, mimetype="application/zip", as_attachment=True,
-            download_name=f'codejudge-submissions-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.zip',
+            download_name=f'study-platform-submissions-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}.zip',
             max_age=0,
         )
 

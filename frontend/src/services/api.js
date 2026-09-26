@@ -160,7 +160,7 @@ export async function exportSubmissions() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.download = 'codejudge-submissions.zip';
+  link.download = 'study-platform-submissions.zip';
   document.body.appendChild(link);
   link.click();
   link.remove();

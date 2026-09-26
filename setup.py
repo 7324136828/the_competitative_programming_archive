@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Set up CodeJudge application dependencies."""
+"""Set up The Study Platform application dependencies."""
 
 from __future__ import annotations
 
@@ -99,7 +99,7 @@ def main(argv: list[str] | None = None) -> int:
     seed_environment_file()
     setup_application()
 
-    print("\n[setup] Ready. Start The Connector, then run CodeJudge with run.bat or ./run.sh")
+    print("\n[setup] Ready. Start The Connector, then run The Study Platform with run.bat or ./run.sh")
     return 0
 
 

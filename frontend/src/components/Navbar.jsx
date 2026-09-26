@@ -52,7 +52,7 @@ export default function Navbar({
             <Code2 size={20} strokeWidth={2.5} />
           </div>
           <span style={{ fontWeight: 700, fontSize: '1.1rem', letterSpacing: '-0.02em', color: '#eff2f6' }}>
-            CodeJudge
+            The Study Platform
           </span>
           <span style={{
             fontSize: '0.7rem',
@@ -63,7 +63,7 @@ export default function Navbar({
             fontWeight: 600,
             border: '1px solid #4a4a4a'
           }}>
-            LeetCode Local
+            Universal Intelligence in Researchs
           </span>
         </div>
 

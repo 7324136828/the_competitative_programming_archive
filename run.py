@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the CodeJudge backend and Vite frontend."""
+"""Run The Study Platform backend and Vite frontend."""
 
 from __future__ import annotations
 
@@ -200,7 +200,7 @@ def main() -> int:
     if frontend_port != requested_frontend:
         print(f"[run] Frontend port {requested_frontend} is busy; using {frontend_port}.")
     print("=" * 62)
-    print("CodeJudge LeetCode Platform")
+    print("The Study Platform - Universal Intelligence in Researchs")
     print(f"Python:   {sys.executable}")
     print(f"Backend:  {backend_url} (API: {backend_url}/api/problems)")
     print(f"Frontend: {frontend_url}")
@@ -210,6 +210,8 @@ def main() -> int:
             print(f"LAN:      http://{address}:{frontend_port}")
         if not addresses:
             print(f"LAN:      http://<this-computer-LAN-IP>:{frontend_port}")
+        if os.name == "nt":
+            print("LAN note: allow Python and Node.js on Private networks if Windows Firewall prompts.")
     print(f"Connector: {os.environ.get('CONNECTOR_BASE_URL', 'http://127.0.0.1:8301/v1')} (LLM and speech)")
     print("Press Ctrl+C to stop services started by this launcher.")
     print("=" * 62, flush=True)

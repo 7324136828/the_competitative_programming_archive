@@ -173,13 +173,16 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
 
   return (
     <header className="h-14 bg-white border-b border-[#DFE1E6] px-4 flex items-center justify-between select-none z-30 relative">
-      {/* Left: Jira branding & Project Selector */}
+      {/* Left: platform branding & Project Selector */}
       <div className="flex items-center space-x-6">
         <div className="flex items-center space-x-2 cursor-pointer">
           <div className="w-8 h-8 rounded bg-[#0052CC] flex items-center justify-center text-white font-bold text-lg shadow-sm">
-            J
+            S
           </div>
-          <span className="font-bold text-[#172B4D] text-lg tracking-tight">Jira Software</span>
+          <div className="leading-tight">
+            <div className="font-bold text-[#172B4D] text-base tracking-tight">The Study Platform</div>
+            <div className="text-[10px] text-[#5E6C84]">Universal Intelligence in Researchs</div>
+          </div>
         </div>
 
         {/* Project Selector */}

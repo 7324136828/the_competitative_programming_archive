@@ -401,6 +401,95 @@ class StudySetApiTests(unittest.TestCase):
         self.assertEqual(progress['flashcards'], {'completed': 1, 'total': 2})
         self.assertEqual((progress['completed'], progress['total'], progress['percent']), (4, 5, 80))
 
+    def test_05e_connector_tools_recall_study_activity(self):
+        tool_names = {
+            item['function']['name'] for item in self.client.get('/api/ai/tools').json()
+        }
+        self.assertTrue({
+            'list_study_sets', 'get_study_material', 'get_study_history',
+            'search_coding_problems', 'get_coding_problem', 'get_coding_history',
+        }.issubset(tool_names))
+
+        listed = self.client.post('/api/ai/tools/list_study_sets', json={})
+        self.assertEqual(listed.status_code, 200)
+        selected = next(
+            item for item in listed.json()['studySets']
+            if item['id'] == self.created_workspace_id
+        )
+        self.assertEqual(selected['name'], 'Trees & Graphs (Chapter 1)')
+        self.assertEqual(selected['progress']['percent'], 80)
+
+        history = self.client.post(
+            '/api/ai/tools/get_study_history',
+            json={'workspace': 'Trees & Graphs (Chapter 1)', 'activity': 'all'},
+        )
+        self.assertEqual(history.status_code, 200)
+        recalled = history.json()
+        self.assertEqual(recalled['quizAttempts'][0]['responses'][0]['selectedAnswer'], 'O(N)')
+        self.assertEqual(recalled['qandaSessions'][0]['responses'][0]['answer'], 'Root, Left, Right')
+        self.assertEqual(recalled['flashcards'][0]['front'], 'BFS')
+        self.assertTrue(recalled['flashcards'][0]['remembered'])
+
+        material = self.client.post(
+            '/api/ai/tools/get_study_material',
+            json={'workspace': self.created_workspace_id, 'kind': 'quizzes', 'file': 'quiz.json'},
+        )
+        self.assertEqual(material.status_code, 200)
+        self.assertEqual(material.json()['content']['title'], 'Tree Quiz')
+
+    def test_05f_connector_tools_recall_coding_activity(self):
+        database = self.app.state.archive_database
+        problem = database.create_problem({
+            'title': 'Connector Binary Search',
+            'problem_statements': 'Find a target in a sorted array.',
+            'sample_input_output': [{'input': '5 3', 'output': '2'}],
+            'hints': ['Halve the search interval.'],
+            'language': 'en',
+            'difficulty': 'Easy',
+            'tags': ['Binary Search'],
+            'source': 'connector-test',
+        })
+        database.save_submission({
+            'problem_id': problem['id'], 'language': 'python', 'code': 'print(-1)',
+            'status': 'Wrong Answer', 'error': '', 'test_results': [],
+        })
+
+        search = self.client.post(
+            '/api/ai/tools/search_coding_problems',
+            json={'query': 'Binary Search', 'solved': 'unsolved'},
+        ).json()
+        found = next(item for item in search['problems'] if item['id'] == problem['id'])
+        self.assertEqual(found['attemptCount'], 1)
+        self.assertEqual(found['lastVerdict'], 'Wrong Answer')
+
+        detail = self.client.post(
+            '/api/ai/tools/get_coding_problem', json={'problemId': problem['id']}
+        ).json()
+        self.assertEqual(detail['title'], 'Connector Binary Search')
+        self.assertEqual(detail['hints'], ['Halve the search interval.'])
+        self.assertEqual(detail['recentAttempts'][0]['status'], 'Wrong Answer')
+
+        history = self.client.post(
+            '/api/ai/tools/get_coding_history',
+            json={'problemId': problem['id'], 'limit': 5},
+        ).json()
+        self.assertEqual(history['attempts'][0]['title'], 'Connector Binary Search')
+        self.assertEqual(history['attempts'][0]['status'], 'Wrong Answer')
+
+    def test_05g_connector_registration_uses_domain_names(self):
+        from backend.jira.services.ai import registration
+
+        with patch.object(registration, 'register_agent_tool') as register:
+            result = registration.register_tools_with_connector()
+
+        names = {call.kwargs['name'] for call in register.call_args_list}
+        self.assertIn('study_get_study_history', names)
+        self.assertIn('study_get_study_material', names)
+        self.assertIn('archive_search_coding_problems', names)
+        self.assertIn('archive_get_coding_history', names)
+        self.assertIn('jira_search_tickets', names)
+        self.assertEqual(result['failed'], [])
+
     def test_06_delete_study_set(self):
         ws_id = getattr(self, 'created_workspace_id', None)
         self.assertIsNotNone(ws_id)

@@ -81,7 +81,7 @@ export default function SettingsView() {
     <div className="settings-view">
       <div className="settings-content">
         <h1>Settings</h1>
-        <p className="settings-intro">Manage files saved by CodeJudge on this computer.</p>
+        <p className="settings-intro">Manage files saved by The Study Platform on this computer.</p>
         <section className="settings-card" aria-labelledby="saved-audio-title">
           <h2 id="saved-audio-title"><Volume2 size={20} /> Saved audio</h2>
           <p>Problem descriptions and AI responses are read aloud with Kokoro. Their MP3 files are saved to disk and reused when you listen again.</p>

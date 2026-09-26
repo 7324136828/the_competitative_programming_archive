@@ -168,7 +168,7 @@ export const CreateIssueModal: React.FC = () => {
                   onChange={e => setStoryType(e.target.value as any)}
                   className="w-full px-3 py-2 bg-white border border-gray-300 rounded-md text-gray-800 text-xs focus:ring-2 focus:ring-blue-500 outline-none"
                 >
-                  <option value="coding">Coding Problem (CodeJudge)</option>
+                  <option value="coding">Coding Problem (The Study Platform)</option>
                   <option value="learning">Learning Guide & Concepts</option>
                   <option value="study">Study Set (Interactive Learning)</option>
                   <option value="non-coding">Non-Coding / System Design</option>

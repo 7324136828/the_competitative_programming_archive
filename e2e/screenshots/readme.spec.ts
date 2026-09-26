@@ -5,6 +5,57 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const screenshots = resolve(dirname(fileURLToPath(import.meta.url)), '../../docs/screenshots');
+
+const crcTable = Array.from({ length: 256 }, (_, value) => {
+  let crc = value;
+  for (let bit = 0; bit < 8; bit += 1) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+  return crc >>> 0;
+});
+
+function crc32(data: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of data) crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 0xff];
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function zip(entries: Record<string, string>) {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let offset = 0;
+  for (const [filename, contents] of Object.entries(entries)) {
+    const name = Buffer.from(filename, 'utf8');
+    const body = Buffer.from(contents, 'utf8');
+    const checksum = crc32(body);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(body.length, 18);
+    local.writeUInt32LE(body.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    localParts.push(local, name, body);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(body.length, 20);
+    central.writeUInt32LE(body.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE(offset, 42);
+    centralParts.push(central, name);
+    offset += local.length + name.length + body.length;
+  }
+  const centralSize = centralParts.reduce((total, part) => total + part.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(Object.keys(entries).length, 8);
+  end.writeUInt16LE(Object.keys(entries).length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...localParts, ...centralParts, end]);
+}
 const solution = [
   'import sys',
   '',
@@ -59,8 +110,13 @@ async function capture(page: Page, name: string) {
 }
 
 test('capture the README application gallery', async ({ page, request }) => {
+  test.setTimeout(120_000);
   await mkdir(screenshots, { recursive: true });
   expect((await request.delete('/api/database')).ok()).toBeTruthy();
+  const existingLibraries = (await (await request.get('/api/workspace/uploads')).json()).uploads ?? [];
+  for (const library of existingLibraries) {
+    expect((await request.delete(`/api/workspace/uploads/${library.id}`)).ok()).toBeTruthy();
+  }
   const created = await request.post('/api/problems', { data: {
     title: 'Maximum Subarray Sum', difficulty: 'Medium', language: 'en',
     tags: ['Dynamic Programming', 'Arrays'],
@@ -94,6 +150,48 @@ test('capture the README application gallery', async ({ page, request }) => {
       title, difficulty, tags, problem_statements: statement, language: 'en', sample_input_output: [],
     } })).ok()).toBeTruthy();
   }
+
+  const studyArchive = zip({
+    'workspace.json': JSON.stringify({
+      title: 'Actuarial Learning Lab',
+      workspace: [
+        { name: 'Probability Foundations (Chapter 1)', path: './chapter_output/ch_1/output' },
+        { name: 'Life Contingencies (Chapter 2)', path: './chapter_output/ch_2/output' },
+      ],
+    }),
+    'chapter_output/ch_1/output/quizzes/probability.json': JSON.stringify({
+      title: 'Probability Foundations Quiz',
+      description: 'Review expectation, variance, and conditional probability.',
+      questions: [{
+        question: 'If $$E[X]=4$$ and $$E[X^2]=20$$, what is $$Var(X)$$?',
+        options: ['2', '4', '8', '16'], correct: 1,
+        explanation: '$$Var(X)=E[X^2]-E[X]^2=20-16=4$$.',
+        difficulty: 'understanding', sources: ['Chapter 1'],
+      }],
+    }),
+    'chapter_output/ch_1/output/qandas/probability.json': JSON.stringify({
+      title: 'Probability Q&A',
+      questions: [{ id: 'conditional', question: 'Explain conditional probability in your own words.' }],
+    }),
+    'chapter_output/ch_1/output/flashcards/probability.json': JSON.stringify({
+      title: 'Probability Essentials', description: 'Core formulas and interpretations.',
+      cards: [{ type: 'definition', front: 'Variance identity', back: '$$Var(X)=E[X^2]-E[X]^2$$', tags: ['probability'], source_ids: ['Chapter 1'] }],
+    }),
+    'chapter_output/ch_2/output/quizzes/contingencies.json': JSON.stringify({
+      title: 'Life Contingencies Quiz', description: 'Connect survival models and present values.',
+      questions: [{
+        question: 'Which function represents survival beyond age $$x+t$$?',
+        options: ['$$q_x$$', '$$_tp_x$$', '$$\\mu_x$$', '$$v^t$$'], correct: 1,
+        explanation: '$$_tp_x$$ is the probability of surviving at least $$t$$ more years.',
+        difficulty: 'recall', sources: ['Chapter 2'],
+      }],
+    }),
+  });
+  const uploaded = await request.post('/api/workspace/upload', {
+    headers: { 'Content-Type': 'application/zip', 'X-File-Name': 'actuarial_learning_lab.zip' },
+    data: studyArchive,
+  });
+  expect(uploaded.ok()).toBeTruthy();
   const wrong = await request.post('/api/submit', { data: {
     problemId: problem.id, language: 'python', code: solution.replace('current = best = values[0]', 'current = best = 0'), async: false,
   } });
@@ -103,7 +201,7 @@ test('capture the README application gallery', async ({ page, request }) => {
   await page.route('**/api/chat', route => route.fulfill({ json: {
     success: true, model: 'mock-assistant', reply: explanation,
   } }));
-  await page.goto('/');
+  await page.goto('/#problems');
   await page.getByRole('row').filter({ hasText: 'Maximum Subarray Sum' }).click();
   await expect(page.locator('.cm-content')).toHaveAttribute('contenteditable', 'true');
   await page.locator('.cm-content').fill(solution);
@@ -116,7 +214,7 @@ test('capture the README application gallery', async ({ page, request }) => {
   await expect(page.locator('canvas')).toHaveCount(0, { timeout: 10_000 });
   await capture(page, 'solving-workspace.png');
 
-  await page.getByRole('button', { name: 'AI Chat', exact: true }).click();
+  await page.getByRole('button', { name: 'AI Tutor', exact: true }).click();
   const chat = page.getByRole('dialog', { name: 'AI Assistant' });
   await chat.getByRole('textbox').fill('Explain the recurrence and an edge case.');
   await chat.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -126,15 +224,24 @@ test('capture the README application gallery', async ({ page, request }) => {
   await capture(page, 'ai-assistant.png');
   await chat.getByRole('button', { name: 'Close Chat' }).click();
 
-  await page.getByRole('banner').getByRole('button', { name: 'Submissions', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Submission history' })).toBeVisible();
-  const history = (await (await request.get('/api/submissions')).json()).submissions;
-  await page.getByRole('button', { name: `View submission ${history[0].id}`, exact: true }).click();
-  await expect(page.getByLabel('Submitted code', { exact: true })).toHaveText(solution);
+  await page.getByRole('button', { name: 'Submissions', exact: true }).click();
+  await expect(page.getByText(/Past Submissions \(\d+\)/)).toBeVisible();
   await capture(page, 'submission-history.png');
 
-  await page.getByRole('button', { name: 'Problem Set', exact: true }).click();
+  await page.getByRole('button', { name: 'Close Activity Screen' }).click();
   await expect(page.getByRole('row')).toHaveCount(9);
   await expect(page.getByRole('row').filter({ hasText: 'Maximum Subarray Sum' }).locator('td').first()).toHaveCSS('color', 'rgb(44, 187, 93)');
   await capture(page, 'problem-archive.png');
+
+  await page.goto('/#studyset');
+  await expect(page.getByRole('heading', { name: 'Choose a study set' })).toBeVisible();
+  await page.locator('.saved-library-toggle').filter({ hasText: 'actuarial_learning_lab.zip' }).click();
+  const chapterOne = page.locator('.study-set-open').filter({ hasText: 'Probability Foundations (Chapter 1)' });
+  await expect(chapterOne).toBeVisible();
+  await expect(page.locator('.study-set-open').filter({ hasText: 'Life Contingencies (Chapter 2)' })).toBeVisible();
+  await capture(page, 'study-set-library.png');
+
+  await chapterOne.click();
+  await expect(page.getByRole('option', { name: 'Probability Foundations Quiz', exact: true })).toBeVisible();
+  await capture(page, 'study-set-quiz.png');
 });

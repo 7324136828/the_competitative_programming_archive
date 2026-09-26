@@ -737,6 +737,16 @@ class ContentStore:
             for row in rows
         ]
 
+    def get_study_progress(self, workspace_id: str) -> dict[str, Any]:
+        """Return the persisted aggregate progress for one study set."""
+        with self._connect() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)
+            ).fetchone()
+            if exists is None:
+                raise KeyError("Study set not found")
+            return self._study_progress(connection, workspace_id)
+
     @staticmethod
     def _study_progress(connection: sqlite3.Connection, workspace_id: str) -> dict[str, Any]:
         totals = {"quiz": 0, "qanda": 0, "flashcards": 0}

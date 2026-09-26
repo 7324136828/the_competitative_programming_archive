@@ -766,7 +766,7 @@ def chat_response(
     info = get_model_info(model)
 
     system_context = (
-        "You are CodeJudge AI, an expert competitive programming tutor and algorithm assistant.\n"
+        "You are The Study Platform AI, an expert competitive programming tutor and algorithm assistant.\n"
         "Help the user solve coding problems, explain concepts, provide hints, analyze time and space complexity, "
         "and debug code. Write clean, readable Markdown responses with formatted code blocks."
     )
@@ -863,7 +863,7 @@ def chat_response(
     else:
         prob_mention = f" I see you're looking at **{current_problem.get('title')}**." if current_problem else ""
         reply = (
-            f"Hello! I am your CodeJudge AI Assistant.{prob_mention} How can I assist you with your competitive programming today?\n\n"
+            f"Hello! I am your Study Platform AI Assistant.{prob_mention} How can I assist you with your competitive programming today?\n\n"
             "You can ask me to:\n"
             "- 💡 **Explain thinking steps** (minimum 5, maximum 10 steps)\n"
             "- 🧪 **Generate boundary test cases** based on problem limitations\n"
