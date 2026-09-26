@@ -9,6 +9,7 @@
 
 import io
 import json
+import sqlite3
 import zipfile
 import unittest
 import tempfile
@@ -112,6 +113,10 @@ class StudySetApiTests(unittest.TestCase):
         self.assertIn('workspaces', data)
         self.assertIsInstance(data['workspaces'], list)
 
+        pending = self.client.get('/api/workspace/uploads/progress/not-started-yet').json()
+        self.assertEqual(pending['state'], 'pending')
+        self.assertEqual(pending['percent'], 0)
+
     def test_01a_upload_requires_workspace_manifest(self):
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -147,16 +152,30 @@ class StudySetApiTests(unittest.TestCase):
 
     def test_02_upload_and_extract_study_set(self):
         zip_bytes = self._create_mock_zip()
-        res = self.client.post(
-            '/api/workspace/upload',
-            content=zip_bytes,
-            headers={
-                'Content-Type': 'application/zip',
-                'X-Upload-ID': 'chapter-import-test',
-                'X-File-Name': 'algorithms%20deep%20dive.zip',
-            }
-        )
+        from backend.study import state
+        store = state.get_content_store()
+        original_import = store.import_workspace_tree
+        attempts = 0
+
+        def temporarily_locked(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise sqlite3.OperationalError('database is locked')
+            return original_import(*args, **kwargs)
+
+        with patch.object(store, 'import_workspace_tree', side_effect=temporarily_locked):
+            res = self.client.post(
+                '/api/workspace/upload',
+                content=zip_bytes,
+                headers={
+                    'Content-Type': 'application/zip',
+                    'X-Upload-ID': 'chapter-import-test',
+                    'X-File-Name': 'algorithms%20deep%20dive.zip',
+                }
+            )
         self.assertEqual(res.status_code, 200)
+        self.assertEqual(attempts, 2)
         data = res.json()
         self.assertIn('uploadId', data)
         self.assertIn('workspaces', data)
@@ -188,6 +207,12 @@ class StudySetApiTests(unittest.TestCase):
         content_res = self.client.get('/api/content/quizzes/quiz.json')
         self.assertEqual(content_res.status_code, 200)
         self.assertEqual(content_res.json()['title'], 'Tree Quiz')
+
+        cached_uploads = store.list_uploads()
+        cached_workspaces = store.list_all_workspaces()
+        with patch.object(store, '_connect', side_effect=sqlite3.OperationalError('database is locked')):
+            self.assertEqual(store.list_uploads(), cached_uploads)
+            self.assertEqual(store.list_all_workspaces(), cached_workspaces)
 
         chapter_two = data['workspaces'][1]
         StudySetApiTests.second_workspace_id = chapter_two['id']
@@ -364,6 +389,29 @@ class StudySetApiTests(unittest.TestCase):
         history = history_res.json()['attempts']
         self.assertEqual(history[0]['id'], attempt_id)
         self.assertEqual(history[0]['responses'][0]['selectedAnswer'], 'O(N)')
+
+    def test_05bb_study_notes_persist_per_workspace(self):
+        workspace_id = self.created_workspace_id
+        note_url = f'/api/workspace/study-sets/{workspace_id}/note'
+
+        empty_res = self.client.get(note_url)
+        self.assertEqual(empty_res.status_code, 200)
+        self.assertEqual(empty_res.json()['text'], '')
+
+        save_res = self.client.put(note_url, json={'text': 'Review BFS before Friday.\nWork examples 3-5.'})
+        self.assertEqual(save_res.status_code, 200)
+        self.assertEqual(save_res.json()['workspaceId'], workspace_id)
+        self.assertIsNotNone(save_res.json()['updatedAt'])
+
+        from backend.study import state
+        state._store = None
+
+        saved_res = self.client.get(note_url)
+        self.assertEqual(saved_res.status_code, 200)
+        self.assertEqual(saved_res.json()['text'], 'Review BFS before Friday.\nWork examples 3-5.')
+
+        invalid_res = self.client.put(note_url, json={'text': ['not', 'text']})
+        self.assertEqual(invalid_res.status_code, 422)
 
     def test_05c_flashcard_audio_matches_frontend_contract(self):
         with patch('backend.study.router.synthesize_wav', return_value=b'RIFF-test-wave'):

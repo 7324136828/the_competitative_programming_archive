@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef } from "react";
 import { X, BookOpen, Upload, CheckCircle2, ArrowRight, Link2, AlertCircle, Plus } from "lucide-react";
-import { getWorkspaceStatus, listWorkspaceUploads, activateWorkspace, loadUploadedWorkspace, getUploadProgress } from "./lib/api";
-import type { UploadedWorkspace, WorkspaceStatus, StudySet, WorkspaceOption, UploadProgress } from "./types";
+import { getWorkspaceStatus, listWorkspaceUploads, activateWorkspace, loadUploadedWorkspace } from "./lib/api";
+import { uploadWorkspaceFile } from "./studyPersistenceApi";
+import type { UploadedWorkspace, WorkspaceStatus, StudySet, WorkspaceOption, FileUploadProgress } from "./types";
 import { AssociateStoryModal } from "./AssociateStoryModal";
+import { UploadProgressList } from "./UploadProgressList";
 
 interface LoadStudySetModalProps {
   isOpen: boolean;
@@ -23,10 +25,10 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
   const [uploads, setUploads] = useState<UploadedWorkspace[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<FileUploadProgress[]>([]);
   const [associatingSet, setAssociatingSet] = useState<StudySet | WorkspaceOption | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const uploadFiles = useRef<Map<string, File>>(new Map());
 
   const loadData = async () => {
     setLoading(true);
@@ -65,65 +67,75 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
     }
   };
 
-  const handleFileUpload = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".zip")) {
-      setError("Please select a .zip study set archive.");
-      return;
-    }
-    setUploading(true);
+  const handleFileUploads = async (files: File[]) => {
     setError(null);
-    const progressId = crypto.randomUUID().replace(/-/g, "");
-    setUploadProgress({
-      id: progressId,
-      state: "uploading",
-      percent: 0,
-      message: "Preparing upload",
-      currentWorkspace: null,
-      completedWorkspaces: 0,
-      totalWorkspaces: 0,
-    });
-
-    const poll = setInterval(async () => {
+    const jobs = files.map(async (file) => {
+      const progressId = crypto.randomUUID().replace(/-/g, "");
+      const initial: FileUploadProgress = {
+        id: progressId,
+        fileName: file.name,
+        state: "uploading",
+        percent: 0,
+        message: "Preparing upload",
+        currentWorkspace: null,
+        completedWorkspaces: 0,
+        totalWorkspaces: 0,
+        retryable: false,
+      };
+      uploadFiles.current.set(progressId, file);
+      setUploadProgress((current) => [...current, initial]);
+      const fail = (message: string) => {
+        setUploadProgress((current) => current.map((item) =>
+          item.id === progressId ? { ...item, state: "error", error: message, message, percent: 0 } : item
+        ));
+      };
+      if (!file.name.toLowerCase().endsWith(".zip")) {
+        fail("Please select a .zip study set archive.");
+        return;
+      }
+      if (file.size > 512 * 1024 * 1024) {
+        fail("Please choose a ZIP archive smaller than 512 MB.");
+        return;
+      }
+      setUploadProgress((current) => current.map((item) =>
+        item.id === progressId ? { ...item, retryable: true } : item
+      ));
       try {
-        const prog = await getUploadProgress(progressId);
-        setUploadProgress(prog);
-      } catch {}
-    }, 250);
-
-    try {
-      const res = await fetch("/api/workspace/upload", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/zip",
-          "X-File-Name": encodeURIComponent(file.name),
-          "X-Upload-ID": progressId,
-          "X-File-Size": String(file.size),
-        },
-        body: file,
-      });
-      if (!res.ok) {
-        let msg = `Upload failed (${res.status})`;
-        try {
-          const body = await res.json();
-          if (body.detail) msg = body.detail;
-        } catch {}
-        throw new Error(msg);
+        const data = await uploadWorkspaceFile(file, progressId, (progress) => {
+          setUploadProgress((current) => current.map((item) =>
+            item.id === progressId ? { ...item, ...progress, id: progressId, fileName: file.name } : item
+          ));
+        });
+        setWorkspace(data);
+        setUploadProgress((current) => current.map((item) =>
+          item.id === progressId
+            ? { ...item, state: "completed", percent: 100, message: "Import complete", error: null }
+            : item
+        ));
+        uploadFiles.current.delete(progressId);
+      } catch (reason) {
+        fail((reason as Error).message || "Failed to upload study set");
       }
-      const data = await res.json();
-      setWorkspace(data);
-      await loadData();
-      if (data.activeWorkspace) {
-        onSelectStudySet(data.activeWorkspace);
-        onClose();
-      }
-    } catch (err: any) {
-      setError(err.message || "Failed to upload study set");
-    } finally {
-      clearInterval(poll);
-      setUploading(false);
-      setUploadProgress(null);
-    }
+    });
+    await Promise.allSettled(jobs);
+    await loadData();
   };
+
+  const dismissUpload = (id: string) => {
+    uploadFiles.current.delete(id);
+    setUploadProgress((current) => current.filter((item) => item.id !== id));
+  };
+
+  const retryUpload = (id: string) => {
+    const file = uploadFiles.current.get(id);
+    if (!file) return;
+    dismissUpload(id);
+    void handleFileUploads([file]);
+  };
+
+  const uploadingCount = uploadProgress.filter((item) =>
+    item.state !== "completed" && item.state !== "error"
+  ).length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
@@ -139,20 +151,20 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
               ref={fileInputRef}
               type="file"
               accept=".zip"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const f = e.target.files?.[0];
-                if (f) handleFileUpload(f);
+                const files = Array.from(e.target.files || []);
+                if (files.length) void handleFileUploads(files);
                 e.target.value = "";
               }}
             />
             <button
               onClick={() => fileInputRef.current?.click()}
-              disabled={uploading}
               className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition"
             >
               <Upload className="w-3.5 h-3.5" />
-              <span>{uploading ? `${uploadProgress?.percent ?? 0}%` : "Upload New ZIP"}</span>
+              <span>{uploadingCount ? `Uploading ${uploadingCount}` : "Upload ZIPs"}</span>
             </button>
             <button
               onClick={onClose}
@@ -163,32 +175,12 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
           </div>
         </div>
 
-        {uploading && uploadProgress && (
-          <div className="px-6 py-3 bg-emerald-950/70 border-b border-emerald-800 text-xs text-emerald-100 space-y-1.5">
-            <div className="flex items-center justify-between gap-4 font-semibold">
-              <span>{uploadProgress.message}</span>
-              <span>{uploadProgress.percent}%</span>
-            </div>
-            {uploadProgress.currentWorkspace && (
-              <div className="flex items-center justify-between gap-4">
-                <span className="truncate" title={uploadProgress.currentWorkspace}>
-                  {uploadProgress.currentWorkspace}
-                </span>
-                {uploadProgress.totalWorkspaces ? (
-                  <span className="shrink-0 text-emerald-300/80">
-                    {uploadProgress.completedWorkspaces ?? 0}/{uploadProgress.totalWorkspaces} completed
-                  </span>
-                ) : null}
-              </div>
-            )}
-            <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-emerald-400 transition-all duration-200"
-                style={{ width: `${uploadProgress.percent}%` }}
-              />
-            </div>
-          </div>
-        )}
+        <UploadProgressList
+          items={uploadProgress}
+          compact
+          onDismiss={dismissUpload}
+          onRetry={retryUpload}
+        />
 
         {/* Error notification */}
         {error && (

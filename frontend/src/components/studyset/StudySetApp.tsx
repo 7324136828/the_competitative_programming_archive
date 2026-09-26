@@ -22,20 +22,22 @@ import { InfographicView } from "./views/InfographicView";
 import { QandaView } from "./views/QandaView";
 import { PodcastView } from "./views/PodcastView";
 import { HomeView } from "./views/HomeView";
+import { NotesView } from "./views/NotesView";
 import { AssociateStoryModal } from "./AssociateStoryModal";
+import { UploadProgressList } from "./UploadProgressList";
 import {
   getWorkspaceStatus,
   activateWorkspace as activateWorkspaceApi,
   listWorkspaceUploads,
-  getUploadProgress,
   loadUploadedWorkspace,
   deleteStudySet,
   deleteStudyLibrary,
 } from "./lib/api";
+import { uploadWorkspaceFile } from "./studyPersistenceApi";
 import type {
+  FileUploadProgress,
   StudySet,
   UploadedWorkspace,
-  UploadProgress,
   WorkspaceOption,
   WorkspaceStatus,
 } from "./types";
@@ -52,6 +54,7 @@ const VIEWER_TABS = [
   { id: "datatables", label: "Data Tables", icon: "📋" },
   { id: "infographics", label: "Infographics", icon: "🎨" },
   { id: "podcasts", label: "Podcasts", icon: "🎙️" },
+  { id: "notes", label: "Notes", icon: "📝" },
 ];
 
 type PendingDelete =
@@ -78,13 +81,14 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
   const [uploads, setUploads] = useState<UploadedWorkspace[]>([]);
   const [showUploads, setShowUploads] = useState(false);
   const [loadingUploads, setLoadingUploads] = useState(true);
-  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<FileUploadProgress[]>([]);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [associatingSet, setAssociatingSet] = useState<StudySet | WorkspaceOption | null>(null);
   const [isAssociateModalOpen, setIsAssociateModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const uploadInput = useRef<HTMLInputElement>(null);
+  const uploadFiles = useRef<Map<string, File>>(new Map());
 
   const refreshUploads = async () => {
     setLoadingUploads(true);
@@ -173,74 +177,74 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
     }
   };
 
-  const handleUploadFile = async (file: File) => {
-    if (!file.name.toLowerCase().endsWith(".zip")) {
-      setWorkspaceError("Please select a .zip study set archive.");
-      return;
-    }
-    if (file.size > 512 * 1024 * 1024) {
-      setWorkspaceError("Please choose a ZIP archive smaller than 512 MB.");
-      return;
-    }
-
-    setWorkspaceAction("upload");
+  const handleUploadFiles = async (files: File[]) => {
     setWorkspaceError("");
-    const progressId = crypto.randomUUID().replace(/-/g, "");
-    setUploadProgress({
-      id: progressId,
-      state: "uploading",
-      percent: 0,
-      message: "Preparing upload",
-      currentWorkspace: null,
-      completedWorkspaces: 0,
-      totalWorkspaces: 0,
+    const jobs = files.map(async (file) => {
+      const progressId = crypto.randomUUID().replace(/-/g, "");
+      const initial: FileUploadProgress = {
+        id: progressId,
+        fileName: file.name,
+        state: "uploading",
+        percent: 0,
+        message: "Preparing upload",
+        currentWorkspace: null,
+        completedWorkspaces: 0,
+        totalWorkspaces: 0,
+        retryable: false,
+      };
+      uploadFiles.current.set(progressId, file);
+      setUploadProgress((current) => [...current, initial]);
+
+      const fail = (message: string) => {
+        setUploadProgress((current) => current.map((item) =>
+          item.id === progressId ? { ...item, state: "error", error: message, message, percent: 0 } : item
+        ));
+      };
+      if (!file.name.toLowerCase().endsWith(".zip")) {
+        fail("Please select a .zip study set archive.");
+        return;
+      }
+      if (file.size > 512 * 1024 * 1024) {
+        fail("Please choose a ZIP archive smaller than 512 MB.");
+        return;
+      }
+      setUploadProgress((current) => current.map((item) =>
+        item.id === progressId ? { ...item, retryable: true } : item
+      ));
+
+      try {
+        const result = await uploadWorkspaceFile(file, progressId, (progress) => {
+          setUploadProgress((current) => current.map((item) =>
+            item.id === progressId ? { ...item, ...progress, id: progressId, fileName: file.name } : item
+          ));
+        });
+        setWorkspace(result);
+        setUploadProgress((current) => current.map((item) =>
+          item.id === progressId
+            ? { ...item, state: "completed", percent: 100, message: "Import complete", error: null }
+            : item
+        ));
+        uploadFiles.current.delete(progressId);
+      } catch (reason) {
+        fail((reason as Error).message || "Upload failed");
+      }
     });
 
-    let polling = true;
-    const pollTimer = window.setInterval(async () => {
-      if (!polling) return;
-      try {
-        const prog = await getUploadProgress(progressId);
-        setUploadProgress(prog);
-      } catch {
-        // Polling failure is safe to ignore
-      }
-    }, 250);
+    await Promise.allSettled(jobs);
+    await Promise.all([refreshWorkspace(), refreshUploads()]);
+    setActiveTab("home");
+  };
 
-    try {
-      const response = await fetch("/api/workspace/upload", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/zip",
-          "X-File-Name": encodeURIComponent(file.name),
-          "X-Upload-ID": progressId,
-          "X-File-Size": String(file.size),
-        },
-        body: file,
-      });
+  const dismissUpload = (id: string) => {
+    uploadFiles.current.delete(id);
+    setUploadProgress((current) => current.filter((item) => item.id !== id));
+  };
 
-      if (!response.ok) {
-        let msg = `Upload failed (${response.status})`;
-        try {
-          const body = await response.json();
-          if (body.detail) msg = body.detail;
-          else if (body.error) msg = body.error;
-        } catch {}
-        throw new Error(msg);
-      }
-
-      const resData = await response.json();
-      setWorkspace(resData);
-      await refreshUploads();
-      setActiveTab("home");
-    } catch (err: any) {
-      setWorkspaceError(err.message || "Upload failed");
-    } finally {
-      polling = false;
-      window.clearInterval(pollTimer);
-      setUploadProgress(null);
-      setWorkspaceAction(null);
-    }
+  const retryUpload = (id: string) => {
+    const file = uploadFiles.current.get(id);
+    if (!file) return;
+    dismissUpload(id);
+    void handleUploadFiles([file]);
   };
 
   const handleConfirmDelete = async () => {
@@ -266,6 +270,11 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
 
   const activeOption = workspace?.workspaces.find((w) => w.id === workspace?.activeWorkspace) || workspace?.workspaces[0];
   const activeStory = activeOption?.story;
+  const activeProgress = uploads
+    .flatMap((upload) => upload.studySets || [])
+    .find((studySet) =>
+      studySet.id === workspace?.activeWorkspace || studySet.id === activeOption?.databaseWorkspaceId
+    )?.progress;
 
   return (
     <div
@@ -327,6 +336,35 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
                 <span>Link Story</span>
               </button>
             ) : null}
+
+            {activeOption && (
+              <div
+                className="hidden sm:flex items-center gap-2 min-w-[180px] text-[11px] text-gray-400"
+                title={
+                  activeProgress?.total
+                    ? `${activeProgress.completed} of ${activeProgress.total} mastered (${activeProgress.percent}%)`
+                    : "No tracked activities"
+                }
+              >
+                <span className="font-semibold whitespace-nowrap">Progress</span>
+                <span
+                  className="w-24 h-1.5 bg-gray-800 rounded-full overflow-hidden"
+                  role="progressbar"
+                  aria-label={`Overall progress for ${activeOption.name}`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={activeProgress?.percent ?? 0}
+                >
+                  <span
+                    className="block h-full bg-emerald-400 transition-all duration-200"
+                    style={{ width: `${activeProgress?.percent ?? 0}%` }}
+                  />
+                </span>
+                <span className="font-semibold text-gray-300 whitespace-nowrap">
+                  {activeProgress?.completed ?? 0}/{activeProgress?.total ?? 0} ({activeProgress?.percent ?? 0}%)
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Right: Upload Button & Quick Action */}
@@ -346,10 +384,11 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
               ref={uploadInput}
               type="file"
               accept=".zip"
+              multiple
               className="hidden"
               onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleUploadFile(file);
+                const files = Array.from(e.target.files || []);
+                if (files.length) void handleUploadFiles(files);
                 e.target.value = "";
               }}
             />
@@ -387,34 +426,11 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
       </header>
 
       {/* Progress & Error Notification */}
-      {uploadProgress && (
-        <div className="p-3 bg-emerald-950/80 border-b border-emerald-800 text-emerald-200 text-xs flex items-center justify-between">
-          <div className="space-y-1 flex-1 max-w-xl">
-            <div className="flex justify-between font-semibold">
-              <span>{uploadProgress.message}</span>
-              <span>{uploadProgress.percent}%</span>
-            </div>
-            {uploadProgress.currentWorkspace && (
-              <div className="flex items-center justify-between gap-4 text-emerald-100">
-                <span className="truncate" title={uploadProgress.currentWorkspace}>
-                  {uploadProgress.currentWorkspace}
-                </span>
-                {uploadProgress.totalWorkspaces ? (
-                  <span className="shrink-0 text-emerald-300/80">
-                    {uploadProgress.completedWorkspaces ?? 0}/{uploadProgress.totalWorkspaces} completed
-                  </span>
-                ) : null}
-              </div>
-            )}
-            <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-emerald-400 transition-all duration-200"
-                style={{ width: `${uploadProgress.percent}%` }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
+      <UploadProgressList
+        items={uploadProgress}
+        onDismiss={dismissUpload}
+        onRetry={retryUpload}
+      />
 
       {workspaceError && (
         <div className="p-2.5 bg-rose-950/80 border-b border-rose-800 text-rose-200 text-xs flex items-center justify-between">
@@ -469,6 +485,7 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
         {activeTab === "datatables" && <DatatableView />}
         {activeTab === "infographics" && <InfographicView />}
         {activeTab === "podcasts" && <PodcastView />}
+        {activeTab === "notes" && <NotesView workspaceId={workspace?.activeWorkspace ?? null} />}
       </div>
 
       {/* Modals */}

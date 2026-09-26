@@ -10,7 +10,9 @@ import mimetypes
 import shutil
 import sqlite3
 import tempfile
+import threading
 import uuid
+from copy import deepcopy
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +40,9 @@ class ContentStore:
     def __init__(self, database: Path | str, voice_dir: Path | str) -> None:
         self.database = Path(database).resolve()
         self.voice_dir = Path(voice_dir).resolve()
+        self._cache_lock = threading.RLock()
+        self._uploads_cache: list[dict[str, Any]] | None = None
+        self._workspaces_cache: list[dict[str, Any]] | None = None
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self.voice_dir.mkdir(parents=True, exist_ok=True)
         self._initialize()
@@ -48,6 +53,7 @@ class ContentStore:
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA busy_timeout = 30000")
+        connection.execute("PRAGMA synchronous = NORMAL")
         try:
             with connection:
                 yield connection
@@ -129,6 +135,11 @@ class ContentStore:
                 );
                 CREATE INDEX IF NOT EXISTS flashcard_progress_workspace
                     ON flashcard_progress(workspace_id, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS study_notes (
+                    workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+                    note_text TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
 
@@ -254,24 +265,32 @@ class ContentStore:
             raise
 
     def list_uploads(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT u.id, u.name, u.original_filename, u.uploaded_at,
-                       COUNT(w.id) AS workspace_count
-                FROM uploads AS u
-                JOIN workspaces AS w ON w.upload_id = u.id
-                GROUP BY u.id
-                ORDER BY u.uploaded_at DESC
-                """
-            ).fetchall()
-            workspace_rows = connection.execute(
-                "SELECT id, upload_id, workspace_key, name, story_id FROM workspaces ORDER BY rowid"
-            ).fetchall()
-            progress_by_workspace = {
-                str(workspace["id"]): self._study_progress(connection, str(workspace["id"]))
-                for workspace in workspace_rows
-            }
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT u.id, u.name, u.original_filename, u.uploaded_at,
+                           COUNT(w.id) AS workspace_count
+                    FROM uploads AS u
+                    JOIN workspaces AS w ON w.upload_id = u.id
+                    GROUP BY u.id
+                    ORDER BY u.uploaded_at DESC
+                    """
+                ).fetchall()
+                workspace_rows = connection.execute(
+                    "SELECT id, upload_id, workspace_key, name, story_id FROM workspaces ORDER BY rowid"
+                ).fetchall()
+                progress_by_workspace = {
+                    str(workspace["id"]): self._study_progress(connection, str(workspace["id"]))
+                    for workspace in workspace_rows
+                }
+        except sqlite3.OperationalError as error:
+            if "locked" not in str(error).casefold():
+                raise
+            with self._cache_lock:
+                if self._uploads_cache is None:
+                    raise
+                return deepcopy(self._uploads_cache)
         study_sets: dict[str, list[dict[str, Any]]] = {}
         for workspace in workspace_rows:
             study_sets.setdefault(workspace["upload_id"], []).append(
@@ -283,7 +302,7 @@ class ContentStore:
                     "progress": progress_by_workspace[str(workspace["id"])],
                 }
             )
-        return [
+        result = [
             {
                 "id": row["id"],
                 "name": row["name"],
@@ -294,19 +313,30 @@ class ContentStore:
             }
             for row in rows
         ]
+        with self._cache_lock:
+            self._uploads_cache = deepcopy(result)
+        return result
 
     def list_all_workspaces(self) -> list[dict[str, Any]]:
-        with self._connect() as connection:
-            rows = connection.execute(
-                """
-                SELECT w.id, w.upload_id, w.workspace_key, w.name, w.relative_path, w.story_id,
-                       u.name as upload_name, u.uploaded_at
-                FROM workspaces AS w
-                JOIN uploads AS u ON u.id = w.upload_id
-                ORDER BY u.uploaded_at DESC, w.rowid ASC
-                """
-            ).fetchall()
-        return [
+        try:
+            with self._connect() as connection:
+                rows = connection.execute(
+                    """
+                    SELECT w.id, w.upload_id, w.workspace_key, w.name, w.relative_path, w.story_id,
+                           u.name as upload_name, u.uploaded_at
+                    FROM workspaces AS w
+                    JOIN uploads AS u ON u.id = w.upload_id
+                    ORDER BY u.uploaded_at DESC, w.rowid ASC
+                    """
+                ).fetchall()
+        except sqlite3.OperationalError as error:
+            if "locked" not in str(error).casefold():
+                raise
+            with self._cache_lock:
+                if self._workspaces_cache is None:
+                    raise
+                return deepcopy(self._workspaces_cache)
+        result = [
             {
                 "id": row["id"],
                 "upload_id": row["upload_id"],
@@ -320,6 +350,9 @@ class ContentStore:
             }
             for row in rows
         ]
+        with self._cache_lock:
+            self._workspaces_cache = deepcopy(result)
+        return result
 
     def list_workspaces(self, upload_id: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as connection:
@@ -736,6 +769,49 @@ class ContentStore:
             }
             for row in rows
         ]
+
+    def get_note(self, workspace_id: str) -> dict[str, Any]:
+        """Return the persistent free-form note for one study set."""
+        with self._connect() as connection:
+            workspace = connection.execute(
+                "SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)
+            ).fetchone()
+            if workspace is None:
+                raise KeyError("Study set not found")
+            row = connection.execute(
+                "SELECT note_text, updated_at FROM study_notes WHERE workspace_id = ?",
+                (workspace_id,),
+            ).fetchone()
+        return {
+            "workspaceId": workspace_id,
+            "text": str(row["note_text"]) if row else "",
+            "updatedAt": str(row["updated_at"]) if row else None,
+        }
+
+    def save_note(self, workspace_id: str, text: str) -> dict[str, Any]:
+        """Insert or replace the persistent free-form note for one study set."""
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            workspace = connection.execute(
+                "SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)
+            ).fetchone()
+            if workspace is None:
+                raise KeyError("Study set not found")
+            connection.execute(
+                """
+                INSERT INTO study_notes(workspace_id, note_text, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(workspace_id) DO UPDATE SET
+                    note_text = excluded.note_text,
+                    updated_at = excluded.updated_at
+                """,
+                (workspace_id, text, updated_at),
+            )
+        return {
+            "workspaceId": workspace_id,
+            "text": text,
+            "updatedAt": updated_at,
+        }
 
     def get_study_progress(self, workspace_id: str) -> dict[str, Any]:
         """Return the persisted aggregate progress for one study set."""

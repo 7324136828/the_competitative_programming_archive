@@ -281,3 +281,15 @@ export interface UploadProgress {
   totalWorkspaces?: number;
 }
 
+export interface FileUploadProgress extends UploadProgress {
+  id: string;
+  fileName: string;
+  retryable?: boolean;
+}
+
+export interface StudyNote {
+  workspaceId: string;
+  text: string;
+  updatedAt: string | null;
+}
+
