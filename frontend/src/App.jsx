@@ -189,6 +189,7 @@ const MainApp = () => {
             <StudySetApp
               initialStudySetId={activeStudySetId}
               onOpenStory={openIssueDetail}
+              projectId={currentProject?.id}
             />
           )}
           {activeTab === 'timeline' && <TimelineGanttView />}
@@ -220,6 +221,7 @@ const MainApp = () => {
           closeLoadStudySet();
           openIssueDetail(storyId);
         }}
+        projectId={currentProject?.id}
       />
 
       {/* Extensible Activity Screen */}

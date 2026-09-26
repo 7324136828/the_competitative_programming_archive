@@ -99,8 +99,17 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
   const fetchAiStatus = async () => {
     try {
       const s = await api.getAiStatus();
-      setServerModel(s.model || '');
-      setAiModels(Array.isArray(s.models) ? s.models : []);
+      const models = Array.isArray(s.models)
+        ? s.models.filter((model: unknown): model is string => typeof model === 'string' && model.length > 0)
+        : [];
+      const selected = models.includes(s.model) ? s.model : (models[0] || '');
+      setServerModel(selected);
+      setAiModels(models);
+      const storedOverride = getModelOverride();
+      if (storedOverride && !models.includes(storedOverride)) {
+        setModelOverride(null);
+        setModelOverrideState(null);
+      }
     } catch (e) {}
   };
 

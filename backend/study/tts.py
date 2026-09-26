@@ -7,6 +7,7 @@ Includes safe fallback audio generation so operations never fail when offline.
 from __future__ import annotations
 
 import io
+import json
 import os
 import struct
 import wave
@@ -17,6 +18,20 @@ CONNECTOR_SPEECH_URL = os.environ.get(
     os.environ.get("CONNECTOR_URL", "http://127.0.0.1:8301") + "/api/speech"
 )
 KOKORO_DIRECT_URL = os.environ.get("KOKORO_DIRECT_URL", "http://127.0.0.1:8302/v1/audio/speech")
+
+
+def _connector_content(text: str) -> str:
+    """Wrap all study text so JSON-looking flashcards cannot be rejected."""
+    return json.dumps({"text": text}, ensure_ascii=False)
+
+
+def _is_wav(response: httpx.Response) -> bool:
+    content_type = response.headers.get("content-type", "").split(";", 1)[0].lower()
+    return (
+        response.status_code == 200
+        and bool(response.content)
+        and (content_type == "audio/wav" or response.content.startswith(b"RIFF"))
+    )
 
 
 def make_silent_wav(duration_seconds: float = 0.5, sample_rate: int = 24000) -> bytes:
@@ -42,9 +57,11 @@ def synthesize_wav(text: str, voice: str = "af_heart", timeout: float = 15.0) ->
         with httpx.Client(timeout=timeout) as client:
             resp = client.post(
                 CONNECTOR_SPEECH_URL,
-                json={"content": cleaned, "voice": voice},
+                # Voice/language configuration belongs to The Connector. Its
+                # public contract accepts only the complete content string.
+                json={"content": _connector_content(cleaned)},
             )
-            if resp.status_code == 200 and resp.content:
+            if _is_wav(resp):
                 return resp.content
     except Exception:
         pass
@@ -56,7 +73,7 @@ def synthesize_wav(text: str, voice: str = "af_heart", timeout: float = 15.0) ->
                 KOKORO_DIRECT_URL,
                 json={"input": cleaned, "voice": voice, "response_format": "wav"},
             )
-            if resp.status_code == 200 and resp.content:
+            if _is_wav(resp):
                 return resp.content
     except Exception:
         pass

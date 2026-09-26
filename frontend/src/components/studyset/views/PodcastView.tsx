@@ -64,10 +64,14 @@ export function PodcastView() {
   const entry = lib.selected?.entry;
 
   async function refreshPodcasts() {
+    if (!entry) {
+      setRefreshNote("Select a podcast script first.");
+      return;
+    }
     setRefreshing(true);
     setRefreshNote(null);
     try {
-      const body = await generatePodcast();
+      const body = await generatePodcast(entry.file);
       setRefreshNote(`Refresh Podcasts: ${body.status ?? "requested"}`);
       lib.reload();
     } catch (error) {
@@ -100,7 +104,7 @@ export function PodcastView() {
   const toolbar = (
     <>
       <button type="button" onClick={lib.reload}>Reload</button>
-      <button type="button" onClick={refreshPodcasts} disabled={refreshing}>
+      <button type="button" onClick={refreshPodcasts} disabled={refreshing || !entry}>
         {refreshing ? "Refreshing…" : "Refresh Podcasts"}
       </button>
       <span className="divider" />

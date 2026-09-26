@@ -109,7 +109,7 @@
 .study-set-card:hover { border-color: var(--accent); transform: translateY(-1px); box-shadow: 0 8px 24px rgb(0 0 0 / 9%); }
 button.study-set-open {
   display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 13px;
-  width: 100%; min-height: 90px; padding: 16px; border: 0; border-radius: 0; text-align: left;
+  width: 100%; min-height: 112px; padding: 16px; border: 0; border-radius: 0; text-align: left;
   background: transparent;
 }
 button.study-set-open:hover:not(:disabled) { border-color: transparent; }
@@ -129,12 +129,30 @@ button.study-set-open:hover:not(:disabled) { border-color: transparent; }
 .study-set-copy strong, .study-set-copy span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .study-set-copy strong { color: var(--ink); font-size: 1rem; }
 .study-set-copy span { color: var(--muted); font-size: 0.8rem; }
+.study-set-copy .study-progress-label { margin-top: 5px; color: var(--ink); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.study-set-copy .study-progress-track {
+  display: block; width: 100%; height: 6px; margin-top: 2px; border-radius: 999px;
+  background: var(--accent-soft); overflow: hidden; text-overflow: clip; white-space: normal;
+}
+.study-set-copy .study-progress-fill {
+  display: block; height: 100%; border-radius: inherit; background: var(--accent);
+  transition: width 180ms ease;
+}
 .study-set-action { color: var(--accent); font-size: 0.8rem; font-weight: 700; white-space: nowrap; }
 .saved-libraries { display: grid; gap: 18px; }
 .saved-library { padding: 18px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in srgb, var(--card) 75%, transparent); }
-.saved-library > header { display: flex; align-items: start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.saved-library > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 0; }
+.saved-library.expanded > header { margin-bottom: 14px; }
 .saved-library > header > div:first-child { min-width: 0; }
-.saved-library h4 { margin: 0; max-width: 100%; overflow-wrap: anywhere; font-size: 1rem; }
+.saved-library-toggle {
+  display: flex; min-width: 0; flex: 1; align-items: center; gap: 11px; padding: 5px; border: 0;
+  background: transparent; text-align: left;
+}
+.saved-library-toggle:hover:not(:disabled) { border-color: transparent; background: var(--panel); }
+.saved-library-copy { min-width: 0; }
+.saved-library-title { display: block; max-width: 100%; overflow-wrap: anywhere; color: var(--ink); font-size: 1rem; font-weight: 700; }
+.saved-library-chevron { color: var(--accent); font-size: 1.65rem; line-height: 1; transform: rotate(0deg); transition: transform 150ms ease; }
+.saved-library.expanded .saved-library-chevron { transform: rotate(90deg); }
 .saved-library p { margin: 2px 0 0; overflow-wrap: anywhere; color: var(--muted); font-size: 0.78rem; }
 .saved-library-actions { display: flex; flex: none; align-items: center; gap: 8px; }
 .saved-library-actions button { padding: 4px 8px; color: var(--bad); font-size: 0.74rem; }

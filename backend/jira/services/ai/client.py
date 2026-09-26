@@ -4,7 +4,12 @@ import httpx
 
 from ...db import db
 from ...util import new_id, now_iso, now_ms
-from ...config import connector_url, connector_api_key, connector_timeout_ms
+from ...config import (
+    connector_url,
+    connector_api_key,
+    connector_timeout_ms,
+    resolve_model as resolve_configured_model,
+)
 
 
 class ConnectorError(Exception):
@@ -102,6 +107,26 @@ def list_models() -> list:
     if res.status_code >= 400:
         raise _parse_error(res)
     return res.json().get('data') or []
+
+
+def resolve_model(request_model: str | None = None, available_models: list | None = None) -> dict:
+    """Resolve to a model that is actually active in the Connector."""
+    resolved = resolve_configured_model(request_model)
+    if available_models is None:
+        try:
+            records = list_models()
+        except Exception:
+            return resolved
+    else:
+        records = available_models
+    model_ids = [
+        record.get('id') if isinstance(record, dict) else record
+        for record in records
+    ]
+    model_ids = [model_id for model_id in model_ids if isinstance(model_id, str) and model_id]
+    if not model_ids or resolved['model'] in model_ids:
+        return resolved
+    return {'model': model_ids[0], 'modelSource': 'connector'}
 
 
 def health() -> dict:

@@ -242,6 +242,19 @@ export interface StudySet {
   key: string;
   name: string;
   story?: StudySetStory | null;
+  progress?: StudyProgress;
+}
+
+export interface ProgressCount {
+  completed: number;
+  total: number;
+}
+
+export interface StudyProgress extends ProgressCount {
+  percent: number;
+  quiz: ProgressCount;
+  qanda: ProgressCount;
+  flashcards: ProgressCount;
 }
 
 export interface UploadedWorkspace {

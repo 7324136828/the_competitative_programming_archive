@@ -62,12 +62,14 @@ interface StudySetAppProps {
   initialStudySetId?: string | null;
   initialTab?: string;
   onOpenStory?: (storyId: string) => void;
+  projectId?: string | null;
 }
 
 export const StudySetApp: React.FC<StudySetAppProps> = ({
   initialStudySetId,
   initialTab = "home",
   onOpenStory,
+  projectId,
 }) => {
   const [activeTab, setActiveTab] = useState(initialTab);
   const [workspace, setWorkspace] = useState<WorkspaceStatus | null>(null);
@@ -110,6 +112,10 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
   useEffect(() => {
     Promise.all([refreshWorkspace(), refreshUploads()]);
   }, []);
+
+  useEffect(() => {
+    if (activeTab === "home") void refreshUploads();
+  }, [activeTab]);
 
   useEffect(() => {
     if (!isFullscreen) return;
@@ -385,9 +391,21 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
         <div className="p-3 bg-emerald-950/80 border-b border-emerald-800 text-emerald-200 text-xs flex items-center justify-between">
           <div className="space-y-1 flex-1 max-w-xl">
             <div className="flex justify-between font-semibold">
-              <span>{uploadProgress.message}...</span>
+              <span>{uploadProgress.message}</span>
               <span>{uploadProgress.percent}%</span>
             </div>
+            {uploadProgress.currentWorkspace && (
+              <div className="flex items-center justify-between gap-4 text-emerald-100">
+                <span className="truncate" title={uploadProgress.currentWorkspace}>
+                  {uploadProgress.currentWorkspace}
+                </span>
+                {uploadProgress.totalWorkspaces ? (
+                  <span className="shrink-0 text-emerald-300/80">
+                    {uploadProgress.completedWorkspaces ?? 0}/{uploadProgress.totalWorkspaces} completed
+                  </span>
+                ) : null}
+              </div>
+            )}
             <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
               <div
                 className="h-full bg-emerald-400 transition-all duration-200"
@@ -423,7 +441,6 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
             loadingUploads={loadingUploads}
             busy={workspaceAction !== null}
             error={workspaceError}
-            onChooseCurrent={(wid) => handleActivateWorkspace(wid, true)}
             onChooseSaved={handleLoadSavedWorkspace}
             onDeleteSaved={(_uid, sset) => setPendingDelete({ kind: "studySet", id: sset.id, name: sset.name })}
             onDeleteLibrary={(upload) =>
@@ -467,6 +484,7 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
           refreshUploads();
         }}
         onOpenStory={onOpenStory}
+        projectId={projectId}
       />
 
       {/* Delete Confirmation Modal */}

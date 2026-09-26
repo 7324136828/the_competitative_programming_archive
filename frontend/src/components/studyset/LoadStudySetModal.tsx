@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { X, BookOpen, Upload, CheckCircle2, ArrowRight, Link2, AlertCircle, Plus } from "lucide-react";
 import { getWorkspaceStatus, listWorkspaceUploads, activateWorkspace, loadUploadedWorkspace, getUploadProgress } from "./lib/api";
-import type { UploadedWorkspace, WorkspaceStatus, StudySet, WorkspaceOption } from "./types";
+import type { UploadedWorkspace, WorkspaceStatus, StudySet, WorkspaceOption, UploadProgress } from "./types";
 import { AssociateStoryModal } from "./AssociateStoryModal";
 
 interface LoadStudySetModalProps {
@@ -9,6 +9,7 @@ interface LoadStudySetModalProps {
   onClose: () => void;
   onSelectStudySet: (studySetId: string) => void;
   onOpenStory?: (storyId: string) => void;
+  projectId?: string | null;
 }
 
 export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
@@ -16,13 +17,14 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
   onClose,
   onSelectStudySet,
   onOpenStory,
+  projectId,
 }) => {
   const [workspace, setWorkspace] = useState<WorkspaceStatus | null>(null);
   const [uploads, setUploads] = useState<UploadedWorkspace[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
-  const [uploadPercent, setUploadPercent] = useState<number>(0);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
   const [associatingSet, setAssociatingSet] = useState<StudySet | WorkspaceOption | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -70,13 +72,21 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
     }
     setUploading(true);
     setError(null);
-    setUploadPercent(10);
     const progressId = crypto.randomUUID().replace(/-/g, "");
+    setUploadProgress({
+      id: progressId,
+      state: "uploading",
+      percent: 0,
+      message: "Preparing upload",
+      currentWorkspace: null,
+      completedWorkspaces: 0,
+      totalWorkspaces: 0,
+    });
 
     const poll = setInterval(async () => {
       try {
         const prog = await getUploadProgress(progressId);
-        setUploadPercent(prog.percent);
+        setUploadProgress(prog);
       } catch {}
     }, 250);
 
@@ -111,6 +121,7 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
     } finally {
       clearInterval(poll);
       setUploading(false);
+      setUploadProgress(null);
     }
   };
 
@@ -141,7 +152,7 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
               className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition"
             >
               <Upload className="w-3.5 h-3.5" />
-              <span>{uploading ? `${uploadPercent}%` : "Upload New ZIP"}</span>
+              <span>{uploading ? `${uploadProgress?.percent ?? 0}%` : "Upload New ZIP"}</span>
             </button>
             <button
               onClick={onClose}
@@ -151,6 +162,33 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
             </button>
           </div>
         </div>
+
+        {uploading && uploadProgress && (
+          <div className="px-6 py-3 bg-emerald-950/70 border-b border-emerald-800 text-xs text-emerald-100 space-y-1.5">
+            <div className="flex items-center justify-between gap-4 font-semibold">
+              <span>{uploadProgress.message}</span>
+              <span>{uploadProgress.percent}%</span>
+            </div>
+            {uploadProgress.currentWorkspace && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="truncate" title={uploadProgress.currentWorkspace}>
+                  {uploadProgress.currentWorkspace}
+                </span>
+                {uploadProgress.totalWorkspaces ? (
+                  <span className="shrink-0 text-emerald-300/80">
+                    {uploadProgress.completedWorkspaces ?? 0}/{uploadProgress.totalWorkspaces} completed
+                  </span>
+                ) : null}
+              </div>
+            )}
+            <div className="w-full h-1.5 bg-gray-800 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-emerald-400 transition-all duration-200"
+                style={{ width: `${uploadProgress.percent}%` }}
+              />
+            </div>
+          </div>
+        )}
 
         {/* Error notification */}
         {error && (
@@ -343,6 +381,7 @@ export const LoadStudySetModal: React.FC<LoadStudySetModalProps> = ({
         onClose={() => setAssociatingSet(null)}
         onSuccess={loadData}
         onOpenStory={onOpenStory}
+        projectId={projectId}
       />
     </div>
   );

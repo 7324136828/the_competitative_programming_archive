@@ -2,8 +2,8 @@ import json
 
 from ...db import db
 from ...util import new_id
-from ...config import resolve_model, ai_max_input_chars, ai_enabled
-from .client import chat_completion, ConnectorError
+from ...config import ai_max_input_chars, ai_enabled
+from .client import chat_completion, ConnectorError, resolve_model
 from .json_util import parse_json_object
 from .normalizer import normalize_ticket, heuristic_draft
 from .extract import extract_links

@@ -8,7 +8,14 @@ from ..db import db
 from ..util import new_id, now_iso
 from .. import config as cfg
 from ..services.users import resolve_acting_user_id, can_edit_issue, can_configure_project, get_user_role
-from ..services.ai.client import list_models, health, list_agent_tools, chat_completion, ConnectorError
+from ..services.ai.client import (
+    list_models,
+    health,
+    list_agent_tools,
+    chat_completion,
+    resolve_model as resolve_connector_model,
+    ConnectorError,
+)
 from ..services.ai.registration import register_tools_with_connector, get_last_registration
 from ..services.ai.service import draft_tickets, recommend_tickets, intake_report
 from ..services.ai.tools import TOOLS, TOOL_BY_NAME, openai_tool_specs, record_ticket_link
@@ -50,7 +57,9 @@ def status():
         if isinstance(h, dict) and 'version' in h:
             connector['version'] = h['version']
         try:
-            models = [m['id'] for m in list_models()]
+            model_records = list_models()
+            models = [m['id'] for m in model_records]
+            resolved = resolve_connector_model(available_models=model_records)
         except Exception:
             pass
         try:
@@ -77,9 +86,12 @@ def status():
 
 @router.get('/settings')
 def get_settings():
-    resolved = cfg.resolve_model()
+    try:
+        resolved = resolve_connector_model()
+    except Exception:
+        resolved = cfg.resolve_model()
     return {'model': resolved['model'], 'modelSource': resolved['modelSource'],
-            'defaultModel': 'low-cost-mixed-model'}
+            'defaultModel': resolved['model']}
 
 
 @router.put('/settings')
@@ -91,6 +103,7 @@ def put_settings(request: Request, body: dict):
     model = body.get('model')
     if model is not None and not isinstance(model, str):
         return _err(400, 'model must be a string or null')
+    models = None
     if model:
         try:
             models = list_models()
@@ -99,9 +112,12 @@ def put_settings(request: Request, body: dict):
         except Exception:
             pass  # connector unreachable: allow setting anyway
     cfg.set_configured_model(model or None)
-    resolved = cfg.resolve_model()
+    try:
+        resolved = resolve_connector_model(available_models=models)
+    except Exception:
+        resolved = cfg.resolve_model()
     return {'model': resolved['model'], 'modelSource': resolved['modelSource'],
-            'defaultModel': 'low-cost-mixed-model'}
+            'defaultModel': resolved['model']}
 
 
 @router.post('/tickets/draft')
@@ -269,7 +285,10 @@ def assistant(request: Request, body: dict):
         .replace('{projectName}', (project or {}).get('name') or 'none') \
         .replace('{nowIso}', now_iso())
 
-    resolved_model = cfg.resolve_model(body.get('model'))['model']
+    try:
+        resolved_model = resolve_connector_model(body.get('model'))['model']
+    except Exception:
+        resolved_model = cfg.resolve_model(body.get('model'))['model']
     can_mutate = can_edit_issue(acting)
     tool_specs = openai_tool_specs(can_mutate)
 

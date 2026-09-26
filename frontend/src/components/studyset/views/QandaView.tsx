@@ -5,8 +5,10 @@ import { DetailRow, LibraryShell } from "../LibraryShell";
 import {
   createQASession,
   getQASession,
+  listQASessions,
   qaDownloadUrl,
   updateQASession,
+  type QASession,
 } from "../lib/api";
 import { req, ValidationError } from "../lib/content";
 import { useLibrary } from "../lib/useLibrary";
@@ -56,10 +58,25 @@ export function QandaView() {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
+  const [sessions, setSessions] = useState<QASession[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const autosaveTimer = useRef<number | null>(null);
 
   const storageKey = selectedFile ? `qanda-session:${selectedFile}` : null;
+
+  const loadHistory = useCallback(async () => {
+    if (!selectedFile) {
+      setSessions([]);
+      return;
+    }
+    try {
+      const result = await listQASessions(selectedFile);
+      setSessions(result.sessions);
+    } catch (error) {
+      setSessionError(`Could not load Q&A history: ${(error as Error).message}`);
+    }
+  }, [selectedFile]);
 
   useEffect(() => {
     let cancelled = false;
@@ -69,6 +86,8 @@ export function QandaView() {
     setFinished(false);
     setSaveState("idle");
     setSessionError(null);
+    setShowHistory(false);
+    void loadHistory();
     if (!storageKey || !qa || !selectedFile) return () => { cancelled = true; };
 
     const savedId = localStorage.getItem(storageKey);
@@ -84,7 +103,7 @@ export function QandaView() {
       })
       .catch(() => localStorage.removeItem(storageKey));
     return () => { cancelled = true; };
-  }, [qa, selectedFile, storageKey]);
+  }, [loadHistory, qa, selectedFile, storageKey]);
 
   const answered = useMemo(() => answers.filter((answer) => answer.trim()).length, [answers]);
 
@@ -103,6 +122,7 @@ export function QandaView() {
       setIndex(0);
       setFinished(false);
       setSaveState("saved");
+      setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
       saveQueue.current = Promise.resolve();
       localStorage.setItem(storageKey, session.id);
     } catch (error) {
@@ -121,7 +141,8 @@ export function QandaView() {
         .catch(() => undefined)
         .then(async () => {
           try {
-            await updateQASession(sessionId, nextAnswers, nextIndex, completed);
+            const updated = await updateQASession(sessionId, nextAnswers, nextIndex, completed);
+            setSessions((current) => [updated, ...current.filter((item) => item.id !== updated.id)]);
             setSaveState("saved");
           } catch (error) {
             setSaveState("error");
@@ -196,6 +217,18 @@ export function QandaView() {
     autosaveTimer.current = null;
   };
 
+  const openSession = (session: QASession) => {
+    if (!qa || !storageKey || session.responses.length !== qa.questions.length) return;
+    setSessionId(session.id);
+    setAnswers(session.responses.map((response) => response.answer));
+    setIndex(session.currentQuestion);
+    setFinished(session.status === "completed");
+    setSaveState("saved");
+    setSessionError(null);
+    setShowHistory(false);
+    localStorage.setItem(storageKey, session.id);
+  };
+
   const details = qa ? (
     <>
       <p className="details-title">{qa.title}</p>
@@ -211,6 +244,16 @@ export function QandaView() {
     <>
       <button type="button" onClick={lib.reload}>Reload content</button>
       <span className="spacer" />
+      <button
+        type="button"
+        disabled={!qa}
+        onClick={() => {
+          setShowHistory((value) => !value);
+          void loadHistory();
+        }}
+      >
+        {showHistory ? "Back to Q&A" : `History (${sessions.length})`}
+      </button>
       {sessionId ? <button type="button" onClick={() => void download()}>Download JSON</button> : null}
       {sessionId ? <button type="button" onClick={newResponse}>New response</button> : null}
     </>
@@ -219,12 +262,40 @@ export function QandaView() {
   let body: React.ReactNode;
   if (!qa) {
     body = <div className="placeholder">Select a Q&A set.</div>;
+  } else if (showHistory) {
+    body = (
+      <div className="scroll pad qa-review">
+        <h2>Q&A history</h2>
+        <p className="muted">Saved responses for {qa.title}</p>
+        {sessionError ? <p className="bad" role="alert">{sessionError}</p> : null}
+        {sessions.length === 0 ? <p className="muted">No saved responses yet.</p> : null}
+        {sessions.map((session) => (
+          <section className="review" key={session.id}>
+            <div className="row between">
+              <div>
+                <h3>{session.status === "completed" ? "Completed response" : "Response in progress"}</h3>
+                <p className="muted small">Updated {new Date(session.updatedAt).toLocaleString()}</p>
+              </div>
+              <button type="button" onClick={() => openSession(session)}>
+                {session.status === "completed" ? "View response" : "Resume"}
+              </button>
+            </div>
+            {session.responses.map((response, responseIndex) => (
+              <div key={response.id}>
+                <p><strong>{responseIndex + 1}. {response.question}</strong></p>
+                <p className="qa-answer">{response.answer || <span className="muted">No response</span>}</p>
+              </div>
+            ))}
+          </section>
+        ))}
+      </div>
+    );
   } else if (!sessionId) {
     body = (
       <div className="placeholder">
         <h2>{qa.title}</h2>
         <p className="muted">{qa.description}</p>
-        <p>Your responses are stored temporarily by the local Python backend.</p>
+        <p>Your responses are saved in this study set's Q&A history.</p>
         <button type="button" className="primary big" disabled={starting} onClick={() => void begin()}>
           {starting ? "Starting…" : "Start Q&A"}
         </button>
@@ -235,7 +306,7 @@ export function QandaView() {
     body = (
       <div className="scroll pad qa-review">
         <h2>Q&A complete</h2>
-        <p className="muted">All responses are saved temporarily. Download a copy to keep them.</p>
+        <p className="muted">All responses are saved in Q&A history. You can also download a copy.</p>
         <div className="row gap">
           <button type="button" className="primary" onClick={() => void download()}>Download JSON</button>
           <button type="button" onClick={() => setFinished(false)}>Continue editing</button>
@@ -287,7 +358,7 @@ export function QandaView() {
   }
 
   const status = sessionId
-    ? `${answered}/${qa?.questions.length ?? 0} answered · ${saveState === "saving" ? "Saving…" : saveState === "error" ? "Save failed" : "Saved temporarily"}`
+    ? `${answered}/${qa?.questions.length ?? 0} answered · ${saveState === "saving" ? "Saving…" : saveState === "error" ? "Save failed" : "Saved"}`
     : `${lib.documents.length} Q&A sets`;
 
   return (
@@ -301,7 +372,7 @@ export function QandaView() {
       details={details}
       toolbar={toolbar}
       status={status}
-      hint="Answers autosave; download JSON to keep a permanent copy"
+      hint="Answers autosave to Q&A history"
       emptyMessage="No Q&A sets found in new_output/*/qandas."
     >
       {body}

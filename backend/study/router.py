@@ -7,9 +7,11 @@ import base64
 import json
 import logging
 import uuid
+from urllib.parse import unquote
 from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from .state import (
     get_content_store,
@@ -97,11 +99,26 @@ async def upload_workspace(request: Request):
     if not zip_bytes:
         raise HTTPException(status_code=400, detail="Empty upload body")
 
-    progress_id = request.headers.get("x-progress-id") or uuid.uuid4().hex
-    filename = request.headers.get("x-filename") or "study_set.zip"
+    progress_id = (
+        request.headers.get("x-upload-id")
+        or request.headers.get("x-progress-id")
+        or uuid.uuid4().hex
+    )
+    filename = unquote(
+        request.headers.get("x-file-name")
+        or request.headers.get("x-filename")
+        or "study_set.zip"
+    )
 
     try:
-        upload_id = extract_and_import_zip(zip_bytes, filename, upload_id=progress_id)
+        # Extraction and SQLite import are synchronous. Running them off the
+        # event loop lets progress polling requests be served during import.
+        upload_id = await run_in_threadpool(
+            extract_and_import_zip,
+            zip_bytes,
+            filename,
+            upload_id=progress_id,
+        )
         store = get_content_store()
         workspaces = store.list_workspaces(upload_id)
         if workspaces:
@@ -231,7 +248,7 @@ async def create_story_for_workspace(request: Request):
     data = await request.json()
     workspace_id = data.get("workspaceId")
     summary = data.get("summary")
-    project_id = data.get("projectId") or "proj_cp"
+    requested_project_id = data.get("projectId")
 
     if not workspace_id:
         raise HTTPException(status_code=400, detail="workspaceId is required")
@@ -241,21 +258,37 @@ async def create_story_for_workspace(request: Request):
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 
-    story_summary = summary or f"Study: {ws.get('name', 'Learning Module')}"
-    user_id = request.headers.get("x-user-id", "u_alex")
-
-    created = create_issue(
-        {
-            "projectId": project_id,
-            "type": "Story",
-            "story_type": "study",
-            "study_set_id": workspace_id,
-            "summary": story_summary,
-            "description": f"Master the study set: {ws.get('name')}",
-            "priority": "Medium",
-        },
-        creator_id=user_id,
+    project = (
+        db.q1("SELECT id FROM projects WHERE id = ?", requested_project_id)
+        if requested_project_id
+        else None
     )
+    if not project:
+        project = db.q1("SELECT id FROM projects ORDER BY rowid ASC LIMIT 1")
+    if not project:
+        raise HTTPException(
+            status_code=400,
+            detail="Create a Jira project before creating a study-set story",
+        )
+
+    story_summary = summary or f"Study: {ws.get('name', 'Learning Module')}"
+    user_id = request.headers.get("x-user-id") or None
+
+    try:
+        created = create_issue(
+            {
+                "projectId": project["id"],
+                "type": "Story",
+                "story_type": "study",
+                "study_set_id": workspace_id,
+                "summary": story_summary,
+                "description": f"Master the study set: {ws.get('name')}",
+                "priority": "Medium",
+            },
+            creator_id=user_id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
     store.set_workspace_story(workspace_id, created["id"])
 
@@ -317,19 +350,30 @@ def get_content_file(kind: str, filename: str):
 # QA Sessions
 # --------------------------------------------------------------------------
 
+def _active_workspace_or_404() -> str:
+    workspace_id = get_active_workspace_id()
+    if not workspace_id:
+        raise HTTPException(status_code=404, detail="No active study set")
+    return workspace_id
+
+
 @router.post("/qa/sessions")
 async def create_session(request: Request):
     data = await request.json()
-    qa_file = data.get("qaFile", "")
-    title = data.get("title", "Q&A Session")
+    qa_file = str(data.get("qaFile", "")).strip()
+    title = str(data.get("title", "Q&A Session")).strip() or "Q&A Session"
     questions = data.get("questions", [])
-    session = create_qa_session(qa_file, title, questions)
-    return session
+    if not qa_file or not isinstance(questions, list) or not questions:
+        raise HTTPException(status_code=422, detail="qaFile and at least one question are required")
+    try:
+        return create_qa_session(qa_file, title, questions)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.get("/qa/sessions")
-def list_sessions():
-    return {"sessions": list_qa_sessions()}
+def list_sessions(qa_file: str | None = None):
+    return {"sessions": list_qa_sessions(qa_file)}
 
 
 @router.get("/qa/sessions/{session_id}")
@@ -347,6 +391,8 @@ async def update_session(session_id: str, request: Request):
     current_question = data.get("currentQuestion", 0)
     completed = bool(data.get("completed", False))
 
+    if not isinstance(answers, list) or any(not isinstance(answer, str) for answer in answers):
+        raise HTTPException(status_code=422, detail="answers must be an array of strings")
     try:
         updated = update_qa_session(session_id, answers, current_question, completed)
         return updated
@@ -367,6 +413,57 @@ def download_session(session_id: str):
     )
 
 
+@router.post("/quiz/attempts")
+async def create_quiz_attempt(request: Request):
+    workspace_id = _active_workspace_or_404()
+    data = await request.json()
+    quiz_file = str(data.get("quizFile", "")).strip()
+    title = str(data.get("title", "Quiz")).strip() or "Quiz"
+    responses = data.get("responses", [])
+    score = data.get("score")
+    total = data.get("total")
+    if not quiz_file or not isinstance(responses, list):
+        raise HTTPException(status_code=422, detail="quizFile and responses are required")
+    if not isinstance(score, int) or isinstance(score, bool) or not isinstance(total, int) or isinstance(total, bool):
+        raise HTTPException(status_code=422, detail="score and total must be integers")
+    if total < 0 or score < 0 or score > total or len(responses) != total:
+        raise HTTPException(status_code=422, detail="Quiz score, total, and responses do not agree")
+    return get_content_store().create_quiz_attempt(
+        workspace_id, quiz_file, title, responses, score, total
+    )
+
+
+@router.get("/quiz/attempts")
+def list_quiz_attempts(quiz_file: str | None = None):
+    workspace_id = _active_workspace_or_404()
+    return {"attempts": get_content_store().list_quiz_attempts(workspace_id, quiz_file)}
+
+
+@router.put("/flashcards/progress")
+async def save_flashcard_progress(request: Request):
+    workspace_id = _active_workspace_or_404()
+    data = await request.json()
+    flashcard_file = str(data.get("flashcardFile", "")).strip()
+    card_key = str(data.get("cardKey", "")).strip()
+    remembered = data.get("remembered")
+    if not flashcard_file or not card_key or not isinstance(remembered, bool):
+        raise HTTPException(
+            status_code=422,
+            detail="flashcardFile, cardKey, and a boolean remembered value are required",
+        )
+    return get_content_store().set_flashcard_progress(
+        workspace_id, flashcard_file, card_key, remembered
+    )
+
+
+@router.get("/flashcards/progress")
+def get_flashcard_progress(flashcard_file: str | None = None):
+    workspace_id = _active_workspace_or_404()
+    return {
+        "items": get_content_store().list_flashcard_progress(workspace_id, flashcard_file)
+    }
+
+
 # --------------------------------------------------------------------------
 # Audio & Podcasts
 # --------------------------------------------------------------------------
@@ -375,19 +472,32 @@ def download_session(session_id: str):
 async def flashcards_audio(request: Request):
     data = await request.json()
     items = data.get("items") or data.get("cards") or []
+    if not isinstance(items, list):
+        raise HTTPException(status_code=422, detail="cards must be an array")
     audios: dict[str, str] = {}
+    cards: list[dict[str, str]] = []
 
     for idx, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail=f"card {idx + 1} must be an object")
         front_text = item.get("front") or item.get("text", "")
         back_text = item.get("back", "")
+        if not isinstance(front_text, str) or not isinstance(back_text, str):
+            raise HTTPException(status_code=422, detail=f"card {idx + 1} text must be a string")
+        card_audio = {"front": "", "back": ""}
         if front_text:
             front_wav = synthesize_wav(front_text, voice="af_heart")
-            audios[f"front_{idx}"] = "data:audio/wav;base64," + base64.b64encode(front_wav).decode("ascii")
+            encoded = "data:audio/wav;base64," + base64.b64encode(front_wav).decode("ascii")
+            audios[f"front_{idx}"] = encoded
+            card_audio["front"] = encoded
         if back_text:
             back_wav = synthesize_wav(back_text, voice="af_heart")
-            audios[f"back_{idx}"] = "data:audio/wav;base64," + base64.b64encode(back_wav).decode("ascii")
+            encoded = "data:audio/wav;base64," + base64.b64encode(back_wav).decode("ascii")
+            audios[f"back_{idx}"] = encoded
+            card_audio["back"] = encoded
+        cards.append(card_audio)
 
-    return {"audios": audios}
+    return {"cards": cards, "audios": audios, "frontVoice": "af_heart", "backVoice": "af_heart"}
 
 
 @router.post("/generate_podcast")
@@ -405,7 +515,12 @@ async def generate_podcast_endpoint(request: Request):
         try:
             body, _ = store.read_content(active_id, "podcasts", podcast_file)
             script_data = json.loads(body.decode("utf-8-sig"))
-            combined_wav = render_podcast_script(script_data, voice_a, voice_b)
+            combined_wav = await run_in_threadpool(
+                render_podcast_script,
+                script_data,
+                voice_a,
+                voice_b,
+            )
             # Save audio sidecar
             stem = podcast_file.rsplit(".", 1)[0]
             audio_name = f"{stem}.wav"

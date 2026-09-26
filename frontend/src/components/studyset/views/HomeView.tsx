@@ -1,4 +1,6 @@
+import { useState } from "react";
 import type {
+  StudyProgress,
   StudySet,
   StudySetStory,
   UploadedWorkspace,
@@ -12,7 +14,6 @@ interface HomeViewProps {
   loadingUploads: boolean;
   busy: boolean;
   error: string;
-  onChooseCurrent: (workspaceId: string) => void | Promise<void>;
   onChooseSaved: (uploadId: string, workspaceId: string) => void | Promise<void>;
   onDeleteSaved: (uploadId: string, studySet: StudySet) => void;
   onDeleteLibrary: (upload: UploadedWorkspace) => void;
@@ -28,6 +29,7 @@ function StudySetCard({
   active = false,
   disabled,
   story,
+  progress,
   onClick,
   onDelete,
   onAssociateStory,
@@ -38,6 +40,7 @@ function StudySetCard({
   active?: boolean;
   disabled: boolean;
   story?: StudySetStory | null;
+  progress?: StudyProgress;
   onClick: () => void;
   onDelete?: () => void;
   onAssociateStory?: () => void;
@@ -54,6 +57,19 @@ function StudySetCard({
         <span className="study-set-copy">
           <strong>{name}</strong>
           <span>{detail}</span>
+          <span className="study-progress-label">
+            {progress ? `${progress.completed} of ${progress.total} mastered (${progress.percent}%)` : "No tracked activities"}
+          </span>
+          <span
+            className="study-progress-track"
+            role="progressbar"
+            aria-label={`Overall progress for ${name}`}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={progress?.percent ?? 0}
+          >
+            <span className="study-progress-fill" style={{ width: `${progress?.percent ?? 0}%` }} />
+          </span>
         </span>
         <span className="study-set-action">{active ? "Continue" : "Study"} →</span>
       </button>
@@ -106,7 +122,6 @@ export function HomeView({
   loadingUploads,
   busy,
   error,
-  onChooseCurrent,
   onChooseSaved,
   onDeleteSaved,
   onDeleteLibrary,
@@ -115,6 +130,16 @@ export function HomeView({
   onOpenStory,
 }: HomeViewProps) {
   const hasSavedSets = uploads.some((upload) => (upload.studySets ?? []).length > 0);
+  const [expandedUploads, setExpandedUploads] = useState<Set<string>>(() => new Set());
+
+  const toggleUpload = (uploadId: string) => {
+    setExpandedUploads((current) => {
+      const next = new Set(current);
+      if (next.has(uploadId)) next.delete(uploadId);
+      else next.add(uploadId);
+      return next;
+    });
+  };
 
   return (
     <main className="home-view scroll">
@@ -127,33 +152,6 @@ export function HomeView({
         </button>
         {error ? <p className="home-error error-text" role="alert">{error}</p> : null}
       </section>
-
-      {workspace?.exists ? (
-        <section className="study-section" aria-labelledby="current-study-sets">
-          <div className="study-section-heading">
-            <div>
-              <p className="home-eyebrow">Open now</p>
-              <h3 id="current-study-sets">Current study sets</h3>
-            </div>
-            <span>{workspace.workspaces.length} available</span>
-          </div>
-          <div className="study-set-grid">
-            {workspace.workspaces.map((option) => (
-              <StudySetCard
-                key={option.id}
-                name={option.name}
-                detail={option.id === workspace.activeWorkspace ? "Active study set" : "Current library"}
-                active={option.id === workspace.activeWorkspace}
-                disabled={busy}
-                story={option.story}
-                onClick={() => onChooseCurrent(option.id)}
-                onAssociateStory={() => onAssociateStory?.(option)}
-                onOpenStory={onOpenStory}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
 
       <section className="study-section" aria-labelledby="saved-study-sets">
         <div className="study-section-heading">
@@ -169,12 +167,21 @@ export function HomeView({
         ) : hasSavedSets ? (
           <div className="saved-libraries">
             {uploads.map((upload) => (
-              <article className="saved-library" key={upload.id}>
+              <article className={`saved-library ${expandedUploads.has(upload.id) ? "expanded" : ""}`} key={upload.id}>
                 <header>
-                  <div>
-                    <h4>{upload.name}</h4>
-                    <p>{upload.originalFilename}</p>
-                  </div>
+                  <button
+                    type="button"
+                    className="saved-library-toggle"
+                    aria-expanded={expandedUploads.has(upload.id)}
+                    aria-controls={`study-library-${upload.id}`}
+                    onClick={() => toggleUpload(upload.id)}
+                  >
+                    <span className="saved-library-chevron" aria-hidden="true">›</span>
+                    <span className="saved-library-copy">
+                      <span className="saved-library-title">{upload.originalFilename}</span>
+                      <p>{upload.name}</p>
+                    </span>
+                  </button>
                   <div className="saved-library-actions">
                     <span>{upload.workspaceCount} {upload.workspaceCount === 1 ? "set" : "sets"}</span>
                     <button type="button" disabled={busy} onClick={() => onDeleteLibrary(upload)}>
@@ -182,21 +189,25 @@ export function HomeView({
                     </button>
                   </div>
                 </header>
-                <div className="study-set-grid">
-                  {(upload.studySets ?? []).map((studySet) => (
-                    <StudySetCard
-                      key={studySet.id}
-                      name={studySet.name}
-                      detail={`From ${upload.name}`}
-                      disabled={busy}
-                      story={studySet.story}
-                      onClick={() => onChooseSaved(upload.id, studySet.key)}
-                      onDelete={() => onDeleteSaved(upload.id, studySet)}
-                      onAssociateStory={() => onAssociateStory?.(studySet)}
-                      onOpenStory={onOpenStory}
-                    />
-                  ))}
-                </div>
+                {expandedUploads.has(upload.id) ? (
+                  <div className="study-set-grid" id={`study-library-${upload.id}`}>
+                    {(upload.studySets ?? []).map((studySet) => (
+                      <StudySetCard
+                        key={studySet.id}
+                        name={studySet.name}
+                        detail={studySet.id === workspace?.activeWorkspace ? "Active study set" : `From ${upload.name}`}
+                        active={studySet.id === workspace?.activeWorkspace}
+                        disabled={busy}
+                        story={studySet.story}
+                        progress={studySet.progress}
+                        onClick={() => onChooseSaved(upload.id, studySet.key)}
+                        onDelete={() => onDeleteSaved(upload.id, studySet)}
+                        onAssociateStory={() => onAssociateStory?.(studySet)}
+                        onOpenStory={onOpenStory}
+                      />
+                    ))}
+                  </div>
+                ) : null}
               </article>
             ))}
           </div>

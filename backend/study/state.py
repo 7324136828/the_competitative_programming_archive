@@ -11,7 +11,6 @@ import shutil
 import tempfile
 import uuid
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -23,7 +22,6 @@ logger = logging.getLogger("uvicorn.error")
 _store: ContentStore | None = None
 _active_workspace_id: str | None = None
 _upload_progress: dict[str, dict[str, Any]] = {}
-_qa_sessions: dict[str, dict[str, Any]] = {}
 
 
 def _manifest_workspace_root(path_value: Any) -> str:
@@ -66,13 +64,23 @@ def get_active_workspace_id() -> str | None:
     return _active_workspace_id
 
 
-def set_upload_progress(upload_id: str, state: str, percent: int, message: str, current_workspace: str | None = None) -> None:
+def set_upload_progress(
+    upload_id: str,
+    state: str,
+    percent: int,
+    message: str,
+    current_workspace: str | None = None,
+    completed_workspaces: int = 0,
+    total_workspaces: int = 0,
+) -> None:
     _upload_progress[upload_id] = {
         "id": upload_id,
         "state": state,
         "percent": percent,
         "message": message,
         "currentWorkspace": current_workspace,
+        "completedWorkspaces": completed_workspaces,
+        "totalWorkspaces": total_workspaces,
     }
 
 
@@ -85,6 +93,8 @@ def get_upload_progress(upload_id: str) -> dict[str, Any]:
             "percent": 100,
             "message": "Ready",
             "currentWorkspace": None,
+            "completedWorkspaces": 0,
+            "totalWorkspaces": 0,
         }
     )
 
@@ -100,101 +110,130 @@ def extract_and_import_zip(zip_bytes: bytes, original_filename: str, upload_id: 
 
         set_upload_progress(upload_id, "processing", 50, "Parsing manifest and workspaces")
 
-        # Check for workspace.json manifest
-        manifest_file = temp_extract_dir / "workspace.json"
+        # workspace.json is the sole source of study-set definitions. A ZIP
+        # may wrap the collection in one or more parent directories; the
+        # manifest's own directory becomes the root for all relative paths.
+        manifest_files = sorted(
+            temp_extract_dir.rglob("workspace.json"),
+            key=lambda path: (len(path.relative_to(temp_extract_dir).parts), path.as_posix().casefold()),
+        )
+        if not manifest_files:
+            raise ValueError("The archive must contain a workspace.json file")
+        if len(manifest_files) > 1:
+            locations = ", ".join(path.relative_to(temp_extract_dir).as_posix() for path in manifest_files[:5])
+            raise ValueError(f"The archive contains multiple workspace.json files: {locations}")
+        manifest_file = manifest_files[0]
+        manifest_root = manifest_file.parent
         display_name = Path(original_filename).stem.replace("_", " ").title()
         manifest_names: dict[str, str] = {}
 
-        if manifest_file.is_file():
-            try:
-                manifest_data = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
-            except (OSError, UnicodeError, json.JSONDecodeError) as e:
-                raise ValueError(f"Could not parse workspace.json: {e}") from e
+        try:
+            manifest_data = json.loads(manifest_file.read_text(encoding="utf-8-sig"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as e:
+            raise ValueError(f"Could not parse workspace.json: {e}") from e
 
-            if not isinstance(manifest_data, dict):
-                raise ValueError("workspace.json must contain a JSON object")
-            display_name = manifest_data.get("title") or display_name
-            ws_entries = manifest_data.get("workspace", [])
-            if ws_entries and not isinstance(ws_entries, list):
-                raise ValueError("workspace.json field 'workspace' must be an array")
-            for index, entry in enumerate(ws_entries):
-                if not isinstance(entry, dict):
-                    raise ValueError(f"workspace.json entry {index + 1} must be an object")
-                relative = _manifest_workspace_root(entry.get("path"))
-                workspace_root = temp_extract_dir if relative == "." else temp_extract_dir / relative
-                if not (workspace_root / "output").is_dir():
-                    raise ValueError(
-                        f"Workspace path '{entry.get('path')}' does not contain an output folder"
-                    )
-                if relative in manifest_names:
-                    raise ValueError(f"Duplicate workspace path in workspace.json: {entry.get('path')}")
-                default_name = display_name if relative == "." else workspace_root.name
-                manifest_names[relative] = str(entry.get("name") or default_name)
+        if not isinstance(manifest_data, dict):
+            raise ValueError("workspace.json must contain a JSON object")
+        display_name = manifest_data.get("title") or display_name
+        ws_entries = manifest_data.get("workspace")
+        if not isinstance(ws_entries, list) or not ws_entries:
+            raise ValueError("workspace.json field 'workspace' must be a non-empty array")
+        for index, entry in enumerate(ws_entries):
+            if not isinstance(entry, dict):
+                raise ValueError(f"workspace.json entry {index + 1} must be an object")
+            workspace_name = entry.get("name")
+            if not isinstance(workspace_name, str) or not workspace_name.strip():
+                raise ValueError(f"workspace.json entry {index + 1} must have a non-empty name")
+            relative = _manifest_workspace_root(entry.get("path"))
+            workspace_root = manifest_root if relative == "." else manifest_root / relative
+            if not (workspace_root / "output").is_dir():
+                raise ValueError(
+                    f"Workspace path '{entry.get('path')}' does not contain an output folder"
+                )
+            if relative in manifest_names:
+                raise ValueError(f"Duplicate workspace path in workspace.json: {entry.get('path')}")
+            manifest_names[relative] = workspace_name.strip()
 
-        # Ensure at least one output folder exists if flat
-        if not manifest_names and not (temp_extract_dir / "output").is_dir():
-            has_output = any(
-                path.is_dir() and path.name.casefold() == "output"
-                for path in temp_extract_dir.rglob("*")
+        total_workspaces = len(manifest_names)
+        set_upload_progress(
+            upload_id,
+            "processing",
+            50,
+            f"Found {total_workspaces} workspace{'s' if total_workspaces != 1 else ''}",
+            completed_workspaces=0,
+            total_workspaces=total_workspaces,
+        )
+
+        def report_progress(current: int, total: int, workspace_name: str) -> None:
+            if current >= total:
+                set_upload_progress(
+                    upload_id,
+                    "processing",
+                    95,
+                    "Finalizing import",
+                    workspace_name,
+                    completed_workspaces=total,
+                    total_workspaces=total,
+                )
+                return
+            set_upload_progress(
+                upload_id,
+                "processing",
+                50 + int((current / max(total, 1)) * 45),
+                f"Importing workspace {current + 1} of {total}",
+                workspace_name,
+                completed_workspaces=current,
+                total_workspaces=total,
             )
-            if not has_output:
-                # Wrap existing subdirectories into an output directory
-                out_dir = temp_extract_dir / "output"
-                out_dir.mkdir(parents=True, exist_ok=True)
-                for item in list(temp_extract_dir.iterdir()):
-                    if item != out_dir and item.name != "workspace.json":
-                        shutil.move(str(item), str(out_dir / item.name))
 
         store = get_content_store()
         imported_id = store.import_workspace_tree(
-            temp_extract_dir,
+            manifest_root,
             original_filename,
             upload_id=upload_id,
             name=display_name,
             names_map=manifest_names,
-            progress=lambda cur, tot, name: set_upload_progress(
-                upload_id, "processing", 50 + int((cur / max(tot, 1)) * 40), f"Importing {name}", name
-            )
+            progress=report_progress,
         )
-        set_upload_progress(upload_id, "completed", 100, "Import complete")
+        set_upload_progress(
+            upload_id,
+            "completed",
+            100,
+            "Import complete",
+            completed_workspaces=total_workspaces,
+            total_workspaces=total_workspaces,
+        )
         return imported_id
     finally:
         shutil.rmtree(temp_extract_dir, ignore_errors=True)
 
 
-# QA Sessions
+# Persistent QA sessions
 def create_qa_session(qa_file: str, title: str, questions: list[dict[str, Any]]) -> dict[str, Any]:
-    session_id = uuid.uuid4().hex
-    now = datetime.now(timezone.utc).isoformat()
-    session = {
-        "id": session_id,
-        "qaFile": qa_file,
-        "title": title,
-        "questions": questions,
-        "answers": ["" for _ in questions],
-        "currentQuestion": 0,
-        "status": "in_progress",
-        "createdAt": now,
-        "updatedAt": now,
-    }
-    _qa_sessions[session_id] = session
-    return session
+    workspace_id = get_active_workspace_id()
+    if not workspace_id:
+        raise ValueError("No active study set")
+    return get_content_store().create_qa_session(workspace_id, qa_file, title, questions)
 
 
 def get_qa_session(session_id: str) -> dict[str, Any] | None:
-    return _qa_sessions.get(session_id)
+    workspace_id = get_active_workspace_id()
+    if not workspace_id:
+        return None
+    return get_content_store().get_qa_session(session_id, workspace_id)
 
 
 def update_qa_session(session_id: str, answers: list[str], current_question: int, completed: bool) -> dict[str, Any]:
-    session = _qa_sessions.get(session_id)
-    if not session:
+    workspace_id = get_active_workspace_id()
+    if not workspace_id:
         raise KeyError("QA session not found")
-    session["answers"] = answers
-    session["currentQuestion"] = current_question
-    session["status"] = "completed" if completed else "in_progress"
-    session["updatedAt"] = datetime.now(timezone.utc).isoformat()
-    return session
+    return get_content_store().update_qa_session(
+        session_id, workspace_id, answers, current_question, completed
+    )
 
 
-def list_qa_sessions() -> list[dict[str, Any]]:
-    return list(_qa_sessions.values())
+def list_qa_sessions(qa_file: str | None = None) -> list[dict[str, Any]]:
+    workspace_id = get_active_workspace_id()
+    if not workspace_id:
+        return []
+    return get_content_store().list_qa_sessions(workspace_id, qa_file)

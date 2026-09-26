@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { listFlashcardProgress, saveFlashcardProgress } from "../lib/api";
 import { req, ValidationError } from "../lib/content";
 import { shuffle } from "../lib/format";
 import { useLibrary } from "../lib/useLibrary";
@@ -64,15 +65,17 @@ export function FlashcardsView() {
   const [deck, setDeck] = useState<Flashcard[]>([]);
   const [index, setIndex] = useState(0);
   const [revealed, setRevealed] = useState(false);
-  const [grades, setGrades] = useState<Record<number, Grade>>({});
+  const [grades, setGrades] = useState<Record<string, Grade>>({});
   const [done, setDone] = useState(false);
   const [cardAudio, setCardAudio] = useState<Record<string, CardAudio>>({});
   const [narrating, setNarrating] = useState(false);
   const [audioLoading, setAudioLoading] = useState(false);
   const [audioError, setAudioError] = useState("");
+  const [progressError, setProgressError] = useState("");
   const audioPlayer = useRef<HTMLAudioElement | null>(null);
 
   const set = lib.selected?.doc ?? null;
+  const selectedFile = lib.selected?.entry.file ?? null;
 
   const tags = useMemo<string[]>(() => {
     if (!set) return [];
@@ -91,7 +94,6 @@ export function FlashcardsView() {
       setDeck(cards);
       setIndex(0);
       setRevealed(false);
-      setGrades({});
       setDone(false);
     },
     [],
@@ -104,15 +106,32 @@ export function FlashcardsView() {
     setNarrating(false);
     setAudioLoading(false);
     setAudioError("");
+    setProgressError("");
+    setGrades({});
     setTag("(all)");
     setType("(all)");
     rebuild(set, "(all)", "(all)", doShuffle);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [set]);
 
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedFile) return () => { cancelled = true; };
+    void listFlashcardProgress(selectedFile)
+      .then(({ items }) => {
+        if (cancelled) return;
+        setGrades(Object.fromEntries(items.map((item) => [item.cardKey, item.remembered ? "known" : "review"])));
+      })
+      .catch((error: Error) => {
+        if (!cancelled) setProgressError(`Could not load saved progress: ${error.message}`);
+      });
+    return () => { cancelled = true; };
+  }, [selectedFile]);
+
   const card = deck[index] ?? null;
-  const known = Object.values(grades).filter((g) => g === "known").length;
-  const toReview = Object.values(grades).filter((g) => g === "review").length;
+  const known = deck.filter((item) => grades[cardAudioKey(item)] === "known").length;
+  const toReview = deck.filter((item) => grades[cardAudioKey(item)] === "review").length;
+  const graded = known + toReview;
 
   const stopAudio = useCallback(() => {
     audioPlayer.current?.pause();
@@ -191,19 +210,24 @@ export function FlashcardsView() {
 
   const grade = useCallback(
     (value: Grade) => {
-      setGrades((prev) => ({ ...prev, [index]: value }));
+      if (!card || !selectedFile) return;
+      const key = cardAudioKey(card);
+      setGrades((prev) => ({ ...prev, [key]: value }));
+      setProgressError("");
+      void saveFlashcardProgress(selectedFile, key, value === "known").catch((error: Error) => {
+        setProgressError(`Could not save flashcard progress: ${error.message}`);
+      });
       advance();
     },
-    [advance, index],
+    [advance, card, selectedFile],
   );
 
   const reviewMissed = () => {
-    const missed = deck.filter((_, i) => grades[i] === "review");
+    const missed = deck.filter((item) => grades[cardAudioKey(item)] === "review");
     if (missed.length === 0) return;
     setDeck(missed);
     setIndex(0);
     setRevealed(false);
-    setGrades({});
     setDone(false);
   };
 
@@ -314,6 +338,7 @@ export function FlashcardsView() {
           {audioError}
         </span>
       ) : null}
+      {progressError ? <span className="audio-error" role="alert">{progressError}</span> : null}
     </>
   );
 
@@ -352,7 +377,7 @@ export function FlashcardsView() {
           </strong>
           <span className={`badge type-${card.type}`}>{card.type.toUpperCase()}</span>
         </div>
-        <progress value={Object.keys(grades).length} max={deck.length} />
+        <progress value={graded} max={deck.length} />
 
         <button
           type="button"
@@ -414,7 +439,7 @@ export function FlashcardsView() {
       titleOf={(s) => s.title}
       details={details}
       toolbar={toolbar}
-      status={`${Object.keys(grades).length} of ${deck.length} graded · ${known} known, ${toReview} to review`}
+      status={`${graded} of ${deck.length} graded · ${known} known, ${toReview} to review`}
       hint="space flip/advance · ← → navigate · j known · f review"
       emptyMessage="No flashcard sets found in new_output/*/flashcards."
     >

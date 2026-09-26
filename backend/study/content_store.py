@@ -12,6 +12,7 @@ import sqlite3
 import tempfile
 import uuid
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
@@ -91,31 +92,59 @@ class ContentStore:
                     file_path TEXT NOT NULL,
                     PRIMARY KEY(upload_id, relative_path)
                 );
+                CREATE TABLE IF NOT EXISTS qa_sessions (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    qa_file TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    questions_json TEXT NOT NULL,
+                    answers_json TEXT NOT NULL,
+                    current_question INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'in_progress',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS qa_session_history
+                    ON qa_sessions(workspace_id, qa_file, updated_at DESC);
+                CREATE TABLE IF NOT EXISTS quiz_attempts (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    quiz_file TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    responses_json TEXT NOT NULL,
+                    score INTEGER NOT NULL,
+                    total INTEGER NOT NULL,
+                    completed_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS quiz_attempt_history
+                    ON quiz_attempts(workspace_id, quiz_file, completed_at DESC);
+                CREATE TABLE IF NOT EXISTS flashcard_progress (
+                    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    flashcard_file TEXT NOT NULL,
+                    card_key TEXT NOT NULL,
+                    remembered INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(workspace_id, flashcard_file, card_key)
+                );
+                CREATE INDEX IF NOT EXISTS flashcard_progress_workspace
+                    ON flashcard_progress(workspace_id, updated_at DESC);
                 """
             )
 
     @staticmethod
     def _workspace_rows(collection: Path, names_map: dict[str, str] | None = None) -> list[tuple[str, str, Path, str]]:
         collection = collection.resolve()
-        if names_map:
-            # workspace.json is authoritative. Preserve its order and select
-            # the exact workspace roots it names, even when they are nested
-            # several directories below the archive root.
-            candidates = [
-                collection if relative == "." else (collection / relative).resolve()
-                for relative in names_map
-            ]
-        else:
-            # Archives without a manifest still get one study set per output
-            # directory rather than collapsing nested chapters together.
-            candidates = sorted(
-                {
-                    output_dir.parent.resolve()
-                    for output_dir in collection.rglob("*")
-                    if output_dir.is_dir() and output_dir.name.casefold() == "output"
-                },
-                key=lambda item: item.relative_to(collection).as_posix().casefold(),
-            )
+        if not names_map:
+            raise ValueError("workspace.json must define at least one workspace")
+
+        # workspace.json is authoritative. Preserve its order and select only
+        # the exact workspace roots it names, even when they are nested several
+        # directories below the archive root.
+        candidates = [
+            collection if relative == "." else (collection / relative).resolve()
+            for relative in names_map
+        ]
 
         rows: list[tuple[str, str, Path, str]] = []
         for workspace in candidates:
@@ -126,7 +155,7 @@ class ContentStore:
             if not (workspace / "output").is_dir():
                 raise ValueError(f"Workspace '{relative}' does not contain an output folder")
             key = relative
-            ws_name = (names_map or {}).get(relative) or (collection.name if relative == "." else workspace.name)
+            ws_name = names_map[relative]
             rows.append((key, ws_name, workspace, relative))
         return rows
 
@@ -166,7 +195,7 @@ class ContentStore:
     ) -> str:
         workspace_rows = self._workspace_rows(collection_path, names_map=names_map)
         if not workspace_rows:
-            raise ValueError("The archive does not contain an 'output' folder")
+            raise ValueError("workspace.json must define at least one workspace")
 
         upload_id = upload_id or uuid.uuid4().hex
         display_name = name or collection_path.name
@@ -239,6 +268,10 @@ class ContentStore:
             workspace_rows = connection.execute(
                 "SELECT id, upload_id, workspace_key, name, story_id FROM workspaces ORDER BY rowid"
             ).fetchall()
+            progress_by_workspace = {
+                str(workspace["id"]): self._study_progress(connection, str(workspace["id"]))
+                for workspace in workspace_rows
+            }
         study_sets: dict[str, list[dict[str, Any]]] = {}
         for workspace in workspace_rows:
             study_sets.setdefault(workspace["upload_id"], []).append(
@@ -247,6 +280,7 @@ class ContentStore:
                     "key": workspace["workspace_key"],
                     "name": workspace["name"],
                     "story_id": workspace["story_id"],
+                    "progress": progress_by_workspace[str(workspace["id"])],
                 }
             )
         return [
@@ -467,3 +501,318 @@ class ContentStore:
         if row is None:
             raise FileNotFoundError(filename)
         return bytes(row["body"]), str(row["content_type"])
+
+    @staticmethod
+    def _qa_session(row: sqlite3.Row) -> dict[str, Any]:
+        questions = json.loads(str(row["questions_json"]))
+        answers = json.loads(str(row["answers_json"]))
+        responses = [
+            {
+                "id": question.get("id", f"question-{index + 1}"),
+                "question": question.get("question", ""),
+                "answer": answers[index] if index < len(answers) else "",
+            }
+            for index, question in enumerate(questions)
+        ]
+        return {
+            "id": row["id"],
+            "qaFile": row["qa_file"],
+            "title": row["title"],
+            "status": row["status"],
+            "currentQuestion": row["current_question"],
+            "createdAt": row["created_at"],
+            "updatedAt": row["updated_at"],
+            "completedAt": row["completed_at"],
+            "questions": questions,
+            "answers": answers,
+            "responses": responses,
+        }
+
+    def create_qa_session(
+        self, workspace_id: str, qa_file: str, title: str, questions: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        session_id = uuid.uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO qa_sessions(
+                    id, workspace_id, qa_file, title, questions_json, answers_json,
+                    current_question, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 0, 'in_progress', ?, ?)
+                """,
+                (
+                    session_id,
+                    workspace_id,
+                    qa_file,
+                    title,
+                    json.dumps(questions, ensure_ascii=False),
+                    json.dumps(["" for _ in questions]),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute("SELECT * FROM qa_sessions WHERE id = ?", (session_id,)).fetchone()
+        return self._qa_session(row)
+
+    def get_qa_session(self, session_id: str, workspace_id: str) -> dict[str, Any] | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM qa_sessions WHERE id = ? AND workspace_id = ?",
+                (session_id, workspace_id),
+            ).fetchone()
+        return self._qa_session(row) if row else None
+
+    def update_qa_session(
+        self,
+        session_id: str,
+        workspace_id: str,
+        answers: list[str],
+        current_question: int,
+        completed: bool,
+    ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            current = connection.execute(
+                "SELECT questions_json FROM qa_sessions WHERE id = ? AND workspace_id = ?",
+                (session_id, workspace_id),
+            ).fetchone()
+            if current is None:
+                raise KeyError("QA session not found")
+            questions = json.loads(str(current["questions_json"]))
+            normalized = [str(answers[index]) if index < len(answers) else "" for index in range(len(questions))]
+            safe_index = max(0, min(int(current_question), max(0, len(questions) - 1)))
+            connection.execute(
+                """
+                UPDATE qa_sessions
+                SET answers_json = ?, current_question = ?, status = ?, updated_at = ?, completed_at = ?
+                WHERE id = ? AND workspace_id = ?
+                """,
+                (
+                    json.dumps(normalized, ensure_ascii=False),
+                    safe_index,
+                    "completed" if completed else "in_progress",
+                    now,
+                    now if completed else None,
+                    session_id,
+                    workspace_id,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM qa_sessions WHERE id = ? AND workspace_id = ?",
+                (session_id, workspace_id),
+            ).fetchone()
+        return self._qa_session(row)
+
+    def list_qa_sessions(self, workspace_id: str, qa_file: str | None = None) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            if qa_file:
+                rows = connection.execute(
+                    "SELECT * FROM qa_sessions WHERE workspace_id = ? AND qa_file = ? ORDER BY updated_at DESC",
+                    (workspace_id, qa_file),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM qa_sessions WHERE workspace_id = ? ORDER BY updated_at DESC",
+                    (workspace_id,),
+                ).fetchall()
+        return [self._qa_session(row) for row in rows]
+
+    def create_quiz_attempt(
+        self,
+        workspace_id: str,
+        quiz_file: str,
+        title: str,
+        responses: list[dict[str, Any]],
+        score: int,
+        total: int,
+    ) -> dict[str, Any]:
+        attempt_id = uuid.uuid4().hex
+        completed_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO quiz_attempts(
+                    id, workspace_id, quiz_file, title, responses_json, score, total, completed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attempt_id,
+                    workspace_id,
+                    quiz_file,
+                    title,
+                    json.dumps(responses, ensure_ascii=False),
+                    score,
+                    total,
+                    completed_at,
+                ),
+            )
+        return {
+            "id": attempt_id,
+            "quizFile": quiz_file,
+            "title": title,
+            "responses": responses,
+            "score": score,
+            "total": total,
+            "completedAt": completed_at,
+        }
+
+    def list_quiz_attempts(self, workspace_id: str, quiz_file: str | None = None) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            if quiz_file:
+                rows = connection.execute(
+                    "SELECT * FROM quiz_attempts WHERE workspace_id = ? AND quiz_file = ? ORDER BY completed_at DESC",
+                    (workspace_id, quiz_file),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM quiz_attempts WHERE workspace_id = ? ORDER BY completed_at DESC",
+                    (workspace_id,),
+                ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "quizFile": row["quiz_file"],
+                "title": row["title"],
+                "responses": json.loads(str(row["responses_json"])),
+                "score": row["score"],
+                "total": row["total"],
+                "completedAt": row["completed_at"],
+            }
+            for row in rows
+        ]
+
+    def set_flashcard_progress(
+        self, workspace_id: str, flashcard_file: str, card_key: str, remembered: bool
+    ) -> dict[str, Any]:
+        updated_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO flashcard_progress(
+                    workspace_id, flashcard_file, card_key, remembered, updated_at
+                ) VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(workspace_id, flashcard_file, card_key) DO UPDATE SET
+                    remembered = excluded.remembered,
+                    updated_at = excluded.updated_at
+                """,
+                (workspace_id, flashcard_file, card_key, int(remembered), updated_at),
+            )
+        return {
+            "flashcardFile": flashcard_file,
+            "cardKey": card_key,
+            "remembered": remembered,
+            "updatedAt": updated_at,
+        }
+
+    def list_flashcard_progress(
+        self, workspace_id: str, flashcard_file: str | None = None
+    ) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            if flashcard_file:
+                rows = connection.execute(
+                    """
+                    SELECT flashcard_file, card_key, remembered, updated_at
+                    FROM flashcard_progress
+                    WHERE workspace_id = ? AND flashcard_file = ?
+                    ORDER BY updated_at DESC
+                    """,
+                    (workspace_id, flashcard_file),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT flashcard_file, card_key, remembered, updated_at
+                    FROM flashcard_progress WHERE workspace_id = ? ORDER BY updated_at DESC
+                    """,
+                    (workspace_id,),
+                ).fetchall()
+        return [
+            {
+                "flashcardFile": row["flashcard_file"],
+                "cardKey": row["card_key"],
+                "remembered": bool(row["remembered"]),
+                "updatedAt": row["updated_at"],
+            }
+            for row in rows
+        ]
+
+    @staticmethod
+    def _study_progress(connection: sqlite3.Connection, workspace_id: str) -> dict[str, Any]:
+        totals = {"quiz": 0, "qanda": 0, "flashcards": 0}
+        content_rows = connection.execute(
+            """
+            SELECT kind, filename, body FROM content
+            WHERE workspace_id = ? AND kind IN ('quizzes', 'qandas', 'flashcards')
+              AND lower(filename) LIKE '%.json'
+            """,
+            (workspace_id,),
+        ).fetchall()
+        for row in content_rows:
+            try:
+                payload = json.loads(bytes(row["body"]).decode("utf-8-sig"))
+            except (UnicodeError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if row["kind"] == "quizzes" and isinstance(payload.get("questions"), list):
+                totals["quiz"] += len(payload["questions"])
+            elif row["kind"] == "qandas" and isinstance(payload.get("questions"), list):
+                totals["qanda"] += len(payload["questions"])
+            elif row["kind"] == "flashcards" and isinstance(payload.get("cards"), list):
+                totals["flashcards"] += len(payload["cards"])
+
+        correct_questions: set[tuple[str, str]] = set()
+        for row in connection.execute(
+            "SELECT quiz_file, responses_json FROM quiz_attempts WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchall():
+            try:
+                responses = json.loads(str(row["responses_json"]))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(responses, list):
+                continue
+            for index, response in enumerate(responses):
+                if isinstance(response, dict) and response.get("correct") is True:
+                    question = str(response.get("question") or index)
+                    correct_questions.add((str(row["quiz_file"]), question))
+
+        answered_questions: set[tuple[str, str]] = set()
+        for row in connection.execute(
+            "SELECT qa_file, questions_json, answers_json FROM qa_sessions WHERE workspace_id = ?",
+            (workspace_id,),
+        ).fetchall():
+            try:
+                questions = json.loads(str(row["questions_json"]))
+                answers = json.loads(str(row["answers_json"]))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(questions, list) or not isinstance(answers, list):
+                continue
+            for index, answer in enumerate(answers):
+                if not isinstance(answer, str) or not answer.strip():
+                    continue
+                question = questions[index] if index < len(questions) and isinstance(questions[index], dict) else {}
+                question_key = str(question.get("id") or question.get("question") or index)
+                answered_questions.add((str(row["qa_file"]), question_key))
+
+        remembered = connection.execute(
+            "SELECT COUNT(*) FROM flashcard_progress WHERE workspace_id = ? AND remembered = 1",
+            (workspace_id,),
+        ).fetchone()[0]
+        completed = {
+            "quiz": min(len(correct_questions), totals["quiz"]),
+            "qanda": min(len(answered_questions), totals["qanda"]),
+            "flashcards": min(int(remembered), totals["flashcards"]),
+        }
+        completed_total = sum(completed.values())
+        available_total = sum(totals.values())
+        return {
+            "completed": completed_total,
+            "total": available_total,
+            "percent": round((completed_total / available_total) * 100) if available_total else 0,
+            "quiz": {"completed": completed["quiz"], "total": totals["quiz"]},
+            "qanda": {"completed": completed["qanda"], "total": totals["qanda"]},
+            "flashcards": {"completed": completed["flashcards"], "total": totals["flashcards"]},
+        }

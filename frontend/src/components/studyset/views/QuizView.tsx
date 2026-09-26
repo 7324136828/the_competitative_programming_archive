@@ -1,7 +1,8 @@
 /** Port of python/quiz_launcher.py. */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { createQuizAttempt, listQuizAttempts, type QuizAttempt } from "../lib/api";
 import { req, ValidationError } from "../lib/content";
 import { shuffle } from "../lib/format";
 import { useLibrary } from "../lib/useLibrary";
@@ -64,6 +65,27 @@ export function QuizView() {
   const [answers, setAnswers] = useState<(number | null)[]>([]);
   const [choice, setChoice] = useState<number | null>(null);
   const [finished, setFinished] = useState(false);
+  const [attempts, setAttempts] = useState<QuizAttempt[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const attemptSaved = useRef(false);
+
+  const quiz = lib.selected?.doc ?? null;
+  const selectedFile = lib.selected?.entry.file ?? null;
+
+  const loadHistory = useCallback(async () => {
+    if (!selectedFile) {
+      setAttempts([]);
+      return;
+    }
+    try {
+      const result = await listQuizAttempts(selectedFile);
+      setAttempts(result.attempts);
+      setHistoryError(null);
+    } catch (error) {
+      setHistoryError((error as Error).message);
+    }
+  }, [selectedFile]);
 
   const start = useCallback(
     (quiz: Quiz) => {
@@ -73,6 +95,9 @@ export function QuizView() {
       setAnswers(new Array(prepared.questions.length).fill(null));
       setChoice(null);
       setFinished(false);
+      setShowHistory(false);
+      setHistoryError(null);
+      attemptSaved.current = false;
     },
     [shuffleOptions, shuffleQuestions],
   );
@@ -80,9 +105,11 @@ export function QuizView() {
   useEffect(() => {
     setRun(null);
     setFinished(false);
-  }, [lib.selectedIndex, lib.documents.length]);
+    setShowHistory(false);
+    attemptSaved.current = false;
+    void loadHistory();
+  }, [lib.selectedIndex, lib.documents.length, loadHistory]);
 
-  const quiz = lib.selected?.doc ?? null;
   const score = useMemo(
     () =>
       run
@@ -109,10 +136,42 @@ export function QuizView() {
     setChoice(answers[target]);
   };
 
+  const saveAttempt = useCallback(async () => {
+    if (!run || !selectedFile || attemptSaved.current) return;
+    attemptSaved.current = true;
+    const responses = run.questions.map((question, questionIndex) => {
+      const selected = answers[questionIndex];
+      return {
+        question: question.question,
+        selectedAnswer: selected === null ? null : question.options[selected],
+        correctAnswer: question.options[question.correct],
+        correct: selected !== null && selected === question.correct,
+        explanation: question.explanation,
+      };
+    });
+    try {
+      const attempt = await createQuizAttempt(
+        selectedFile,
+        run.title,
+        responses,
+        score,
+        run.questions.length,
+      );
+      setAttempts((current) => [attempt, ...current.filter((item) => item.id !== attempt.id)]);
+      setHistoryError(null);
+    } catch (error) {
+      attemptSaved.current = false;
+      setHistoryError(`Could not save quiz history: ${(error as Error).message}`);
+    }
+  }, [answers, run, score, selectedFile]);
+
   const next = () => {
     if (!run) return;
     if (index < run.questions.length - 1) goto(index + 1);
-    else setFinished(true);
+    else {
+      setFinished(true);
+      void saveAttempt();
+    }
   };
 
   const details = quiz ? (
@@ -157,6 +216,16 @@ export function QuizView() {
         Shuffle question order
       </label>
       <span className="spacer" />
+      <button
+        type="button"
+        disabled={!quiz}
+        onClick={() => {
+          setShowHistory((value) => !value);
+          void loadHistory();
+        }}
+      >
+        {showHistory ? "Back to quiz" : `History (${attempts.length})`}
+      </button>
       <button type="button" className="primary" disabled={!quiz} onClick={() => quiz && start(quiz)}>
         {run ? "Restart quiz" : "Start quiz"}
       </button>
@@ -166,6 +235,30 @@ export function QuizView() {
   let body: React.ReactNode;
   if (!quiz) {
     body = <div className="placeholder">Select a quiz.</div>;
+  } else if (showHistory) {
+    body = (
+      <div className="scroll pad">
+        <h2>Quiz history</h2>
+        <p className="muted">Saved attempts for {quiz.title}</p>
+        {historyError ? <p className="bad" role="alert">{historyError}</p> : null}
+        {attempts.length === 0 ? <p className="muted">No saved attempts yet.</p> : null}
+        {attempts.map((attempt) => (
+          <section className="review" key={attempt.id}>
+            <h3>{attempt.score} / {attempt.total}</h3>
+            <p className="muted small">{new Date(attempt.completedAt).toLocaleString()}</p>
+            {attempt.responses.map((response, responseIndex) => (
+              <div key={responseIndex}>
+                <p><strong>{responseIndex + 1}. {response.question}</strong></p>
+                <p className={response.correct ? "ok" : "bad"}>
+                  Your answer: {response.selectedAnswer ?? "(no answer)"}
+                </p>
+                {!response.correct ? <p className="ok">Correct answer: {response.correctAnswer}</p> : null}
+              </div>
+            ))}
+          </section>
+        ))}
+      </div>
+    );
   } else if (!run) {
     body = (
       <div className="placeholder">
@@ -194,6 +287,11 @@ export function QuizView() {
           {score} / {total} <span className="muted">({pct}%)</span>
         </p>
         <p className="muted">{verdict}</p>
+        {historyError ? (
+          <p className="bad" role="alert">
+            {historyError} <button type="button" onClick={() => void saveAttempt()}>Retry save</button>
+          </p>
+        ) : null}
         <div className="row gap">
           <button type="button" className="primary" onClick={() => start(quiz)}>
             Retake quiz

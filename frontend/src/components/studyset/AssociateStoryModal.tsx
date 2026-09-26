@@ -13,6 +13,7 @@ interface AssociateStoryModalProps {
   onClose: () => void;
   onSuccess: () => void;
   onOpenStory?: (storyId: string) => void;
+  projectId?: string | null;
 }
 
 export const AssociateStoryModal: React.FC<AssociateStoryModalProps> = ({
@@ -21,6 +22,7 @@ export const AssociateStoryModal: React.FC<AssociateStoryModalProps> = ({
   onClose,
   onSuccess,
   onOpenStory,
+  projectId,
 }) => {
   const [mode, setMode] = useState<"create" | "link">("create");
   const [summary, setSummary] = useState("");
@@ -69,7 +71,7 @@ export const AssociateStoryModal: React.FC<AssociateStoryModalProps> = ({
     setLoading(true);
     setError(null);
     try {
-      await createStoryForStudySet(studySet.id, summary.trim(), "proj_cp");
+      await createStoryForStudySet(studySet.id, summary.trim(), projectId || undefined);
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -215,7 +217,7 @@ export const AssociateStoryModal: React.FC<AssociateStoryModalProps> = ({
                       className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white focus:outline-hidden focus:border-emerald-500"
                     />
                     <p className="text-[11px] text-gray-400 mt-1">
-                      A study story (type: <span className="text-emerald-400 font-mono">study</span>) will be created in project CP.
+                      A study story (type: <span className="text-emerald-400 font-mono">study</span>) will be created in the selected Jira project.
                     </p>
                   </div>
                   <div className="flex justify-end space-x-2 pt-2">
