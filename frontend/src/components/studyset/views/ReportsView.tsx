@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import { req, ValidationError } from "../lib/content";
 import { formatCitation } from "../lib/format";
 import { useLibrary } from "../lib/useLibrary";
@@ -32,15 +33,6 @@ function parseReport(raw: Record<string, unknown>, where: string): Report {
       };
     }),
   };
-}
-
-/** Wrap every case-insensitive occurrence of `term` in a <mark>. */
-function highlight(text: string, term: string): React.ReactNode {
-  if (!term) return text;
-  const parts = text.split(new RegExp(`(${term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "gi"));
-  return parts.map((part, i) =>
-    part.toLowerCase() === term.toLowerCase() ? <mark key={i}>{part}</mark> : part,
-  );
 }
 
 export function ReportsView() {
@@ -94,7 +86,7 @@ export function ReportsView() {
 
   const details = report ? (
     <>
-      <p className="details-title">{report.title}</p>
+      <p className="details-title"><StudyText text={report.title} /></p>
       <DetailRow label="Sections" value={report.sections.length} />
       <DetailRow label="Claims" value={stats.claims} />
       <DetailRow label="Citations" value={stats.citations} />
@@ -106,7 +98,7 @@ export function ReportsView() {
         {report.sections.map((section, i) => (
           <li key={section.title}>
             <button type="button" className="link" onClick={() => jumpTo(`section-${i}`)}>
-              {section.title}
+              <StudyText text={section.title} />
             </button>
           </li>
         ))}
@@ -175,21 +167,21 @@ export function ReportsView() {
     >
       {report ? (
         <article className="scroll pad prose" ref={body}>
-          <h1>{highlight(report.title, term)}</h1>
+          <h1><StudyText text={report.title} highlight={term} /></h1>
 
           <h2 id="summary">Executive Summary</h2>
-          <p>{highlight(report.executive_summary, term)}</p>
+          <p><StudyText text={report.executive_summary} highlight={term} /></p>
 
           {report.sections.map((section, i) => (
             <section key={section.title} id={`section-${i}`}>
-              <h2>{highlight(section.title, term)}</h2>
-              <p>{highlight(section.content, term)}</p>
+              <h2><StudyText text={section.title} highlight={term} /></h2>
+              <p><StudyText text={section.content} highlight={term} /></p>
               {showClaims && section.claims.length > 0 && (
                 <>
                   <h3>Key claims</h3>
                   {section.claims.map((claim, j) => (
                     <div key={j} className="claim">
-                      <p>• {highlight(claim.claim, term)}</p>
+                      <p>• <StudyText text={claim.claim} highlight={term} /></p>
                       {claim.citations.length > 0 && (
                         <p className="cite">
                           {claim.citations.map((c) => formatCitation(c)).join(", ")}
@@ -203,7 +195,7 @@ export function ReportsView() {
           ))}
 
           <h2 id="conclusions">Conclusions</h2>
-          <p>{highlight(report.conclusions, term)}</p>
+          <p><StudyText text={report.conclusions} highlight={term} /></p>
         </article>
       ) : (
         <div className="placeholder">Select a report.</div>

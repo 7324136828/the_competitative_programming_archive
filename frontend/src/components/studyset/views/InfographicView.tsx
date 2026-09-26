@@ -9,6 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import { dataUrl, req, ValidationError } from "../lib/content";
 import { groupPanels, parseChartItem, percent, sanitizeSvg } from "../lib/format";
 import { useLibrary } from "../lib/useLibrary";
@@ -89,7 +90,7 @@ function SvgSection({ section }: { section: InfographicSection }) {
     <figure>
       {/* Markup is sanitized above with the same rules as the Python exporter. */}
       <div className="svg-holder" dangerouslySetInnerHTML={{ __html: markup }} />
-      {section.label && <figcaption>{section.label}</figcaption>}
+      {section.label && <figcaption><StudyText text={section.label} /></figcaption>}
     </figure>
   );
 }
@@ -101,22 +102,22 @@ function SectionCard({ section }: { section: InfographicSection }) {
   if (section.type === "stat") {
     body = (
       <>
-        <div className="stat-value">{section.value}</div>
-        <div className="stat-label">{section.label}</div>
+        <div className="stat-value"><StudyText text={section.value} /></div>
+        <div className="stat-label"><StudyText text={section.label} /></div>
       </>
     );
   } else if (section.type === "quote") {
     body = (
       <blockquote>
-        {section.value}
-        {section.label && <footer>— {section.label}</footer>}
+        <StudyText text={section.value} />
+        {section.label && <footer>— <StudyText text={section.label} /></footer>}
       </blockquote>
     );
   } else if (section.type === "flow") {
     body = (
       <ol className="flow">
         {section.items.map((item, i) => (
-          <li key={i}>{item}</li>
+          <li key={i}><StudyText text={item} /></li>
         ))}
       </ol>
     );
@@ -127,7 +128,7 @@ function SectionCard({ section }: { section: InfographicSection }) {
       <>
         {parsed.map((item, i) => (
           <div key={i} className="bar-row">
-            <span>{item.label}</span>
+            <span><StudyText text={item.label} /></span>
             <span className="bar-track">
               <span
                 className="bar-fill"
@@ -149,13 +150,13 @@ function SectionCard({ section }: { section: InfographicSection }) {
         {section.items.map((item, i) =>
           item.includes(" vs ") ? (
             <div key={i} className="pair">
-              <span>{item.split(" vs ")[0].trim()}</span>
+              <span><StudyText text={item.split(" vs ")[0].trim()} /></span>
               <span className="vs">vs</span>
-              <span>{item.split(" vs ").slice(1).join(" vs ").trim()}</span>
+              <span><StudyText text={item.split(" vs ").slice(1).join(" vs ").trim()} /></span>
             </div>
           ) : (
             <div key={i} className="pair">
-              <span>{item}</span>
+              <span><StudyText text={item} /></span>
             </div>
           ),
         )}
@@ -165,7 +166,7 @@ function SectionCard({ section }: { section: InfographicSection }) {
 
   return (
     <section className={className}>
-      {section.title && <div className="kicker">{section.title}</div>}
+      {section.title && <div className="kicker"><StudyText text={section.title} /></div>}
       {body}
     </section>
   );
@@ -234,8 +235,8 @@ export function InfographicView() {
 
   const details = info ? (
     <>
-      <p className="details-title">{info.title}</p>
-      {info.subtitle && <p className="muted small">{info.subtitle}</p>}
+      <p className="details-title"><StudyText text={info.title} /></p>
+      {info.subtitle && <p className="muted small"><StudyText text={info.subtitle} /></p>}
       <DetailRow label="Panels" value={panelNames.length || 1} />
       <DetailRow label="Sections" value={info.sections.length} />
       <DetailRow
@@ -256,7 +257,7 @@ export function InfographicView() {
           <ol className="bullets">
             {panelNames.map((name) => (
               <li key={name}>
-                {name}{" "}
+                <StudyText text={name} />{" "}
                 <span className="muted">
                   ({info.sections.filter((s) => s.panel === name).length})
                 </span>
@@ -323,15 +324,15 @@ export function InfographicView() {
     >
       {info ? (
         <div className="scroll pad infographic">
-          <h1>{info.title}</h1>
-          {info.subtitle && <p className="muted">{info.subtitle}</p>}
+          <h1><StudyText text={info.title} /></h1>
+          {info.subtitle && <p className="muted"><StudyText text={info.subtitle} /></p>}
 
           {shownPanels.map((panel) => (
             <section key={panel.name ?? "unnamed"} className="panel">
               {panel.name && (
                 <h2 className="panel-title">
                   <span className="panel-num">{panel.number}</span>
-                  {panel.name}
+                  <StudyText text={panel.name} />
                 </h2>
               )}
               <div className="panel-grid">

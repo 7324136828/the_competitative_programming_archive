@@ -297,6 +297,20 @@ input[type="number"] { width: 64px; }
 .row.between { justify-content: space-between; }
 .spacer { flex: 1; }
 progress { width: 100%; height: 8px; margin: 10px 0; }
+.study-text { white-space: pre-wrap; }
+.study-plain-text { white-space: inherit; }
+.study-math {
+  display: block; max-width: 100%; overflow-x: auto; overflow-y: hidden;
+  padding: 0.2em 0; color: inherit; text-align: center;
+}
+.study-math .katex-display { margin: 0.25em 0; }
+.study-math .katex { color: inherit; font-size: 1.08em; }
+.mindmap-math {
+  display: flex; width: 100%; height: 100%; align-items: center; justify-content: center;
+  padding: 3px 7px; overflow: hidden; text-align: center; font-size: 11px;
+}
+.mindmap-math .study-text { max-width: 100%; }
+.mindmap-math .study-math { padding: 0; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
 mark { background: var(--hit); color: inherit; }
 .bullets { margin: 4px 0; padding-left: 18px; }

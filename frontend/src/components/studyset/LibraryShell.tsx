@@ -8,6 +8,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import type { Loaded } from "./lib/content";
+import { StudyText } from "./StudyText";
 
 export interface LibraryShellProps<T> {
   documents: Loaded<T>[];
@@ -70,7 +71,7 @@ export function LibraryShell<T>({
           onClick={() => setSidebarOpen(true)}
         >
           <span className="sidebar-toggle-label">Library &amp; details</span>
-          <span className="sidebar-toggle-current">{selectedTitle}</span>
+          <span className="sidebar-toggle-current"><StudyText text={selectedTitle} /></span>
           <span aria-hidden="true">&#9776;</span>
         </button>
       </div>
@@ -108,7 +109,7 @@ export function LibraryShell<T>({
                       setSidebarOpen(false);
                     }}
                   >
-                    {titleOf(item.doc)}
+                    <StudyText text={titleOf(item.doc)} />
                   </button>
                 </li>
               ))}
@@ -146,7 +147,9 @@ export function DetailRow({ label, value }: { label: string; value: ReactNode })
   return (
     <div className="detail-row">
       <span className="detail-label">{label}</span>
-      <span className="detail-value">{value}</span>
+      <span className="detail-value">
+        {typeof value === "string" || typeof value === "number" ? <StudyText text={value} /> : value}
+      </span>
     </div>
   );
 }

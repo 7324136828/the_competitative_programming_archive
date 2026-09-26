@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import { createQuizAttempt, listQuizAttempts, type QuizAttempt } from "../lib/api";
 import { req, ValidationError } from "../lib/content";
 import { shuffle } from "../lib/format";
@@ -176,8 +177,8 @@ export function QuizView() {
 
   const details = quiz ? (
     <>
-      <p className="details-title">{quiz.title}</p>
-      <p className="muted small">{quiz.description}</p>
+      <p className="details-title"><StudyText text={quiz.title} /></p>
+      <p className="muted small"><StudyText text={quiz.description} /></p>
       <DetailRow label="Questions" value={quiz.questions.length} />
       <DetailRow
         label="Difficulty mix"
@@ -239,7 +240,7 @@ export function QuizView() {
     body = (
       <div className="scroll pad">
         <h2>Quiz history</h2>
-        <p className="muted">Saved attempts for {quiz.title}</p>
+        <p className="muted">Saved attempts for <StudyText text={quiz.title} /></p>
         {historyError ? <p className="bad" role="alert">{historyError}</p> : null}
         {attempts.length === 0 ? <p className="muted">No saved attempts yet.</p> : null}
         {attempts.map((attempt) => (
@@ -248,11 +249,11 @@ export function QuizView() {
             <p className="muted small">{new Date(attempt.completedAt).toLocaleString()}</p>
             {attempt.responses.map((response, responseIndex) => (
               <div key={responseIndex}>
-                <p><strong>{responseIndex + 1}. {response.question}</strong></p>
+                <p><strong>{responseIndex + 1}. <StudyText text={response.question} /></strong></p>
                 <p className={response.correct ? "ok" : "bad"}>
-                  Your answer: {response.selectedAnswer ?? "(no answer)"}
+                  Your answer: <StudyText text={response.selectedAnswer ?? "(no answer)"} />
                 </p>
-                {!response.correct ? <p className="ok">Correct answer: {response.correctAnswer}</p> : null}
+                {!response.correct ? <p className="ok">Correct answer: <StudyText text={response.correctAnswer} /></p> : null}
               </div>
             ))}
           </section>
@@ -262,8 +263,8 @@ export function QuizView() {
   } else if (!run) {
     body = (
       <div className="placeholder">
-        <h2>{quiz.title}</h2>
-        <p className="muted">{quiz.description}</p>
+        <h2><StudyText text={quiz.title} /></h2>
+        <p className="muted"><StudyText text={quiz.description} /></p>
         <button type="button" className="primary big" onClick={() => start(quiz)}>
           Start quiz
         </button>
@@ -304,14 +305,14 @@ export function QuizView() {
           return (
             <section key={i} className="review">
               <h3>
-                {i + 1}. {q.question}
+                {i + 1}. <StudyText text={q.question} />
               </h3>
               <p className={ok ? "ok" : "bad"}>
                 Your answer ({ok ? "correct" : "incorrect"}):{" "}
-                {given === null ? "(no answer)" : q.options[given]}
+                <StudyText text={given === null ? "(no answer)" : q.options[given]} />
               </p>
-              {!ok && <p className="ok">Correct answer: {q.options[q.correct]}</p>}
-              <p className="muted">{q.explanation}</p>
+              {!ok && <p className="ok">Correct answer: <StudyText text={q.options[q.correct]} /></p>}
+              <p className="muted"><StudyText text={q.explanation} /></p>
               {q.sources.length > 0 && (
                 <p className="muted small">Source: {q.sources.join(", ")}</p>
               )}
@@ -333,7 +334,7 @@ export function QuizView() {
           <span className="muted">Difficulty: {q.difficulty}</span>
         </div>
         <progress value={answered} max={run.questions.length} />
-        <h2 className="question">{q.question}</h2>
+        <h2 className="question"><StudyText text={q.question} /></h2>
 
         <fieldset className="options" disabled={locked}>
           <legend className="visually-hidden">Choose one</legend>
@@ -346,7 +347,7 @@ export function QuizView() {
                 onChange={() => setChoice(i)}
               />
               <span>
-                {i + 1}. {option}
+                {i + 1}. <StudyText text={option} />
               </span>
             </label>
           ))}
@@ -355,11 +356,9 @@ export function QuizView() {
         {locked && (
           <div className={given === q.correct ? "feedback ok" : "feedback bad"}>
             <strong>
-              {given === q.correct
-                ? "Correct."
-                : `Incorrect. The answer is: ${q.options[q.correct]}`}
+              {given === q.correct ? "Correct." : <>Incorrect. The answer is: <StudyText text={q.options[q.correct]} /></>}
             </strong>
-            <p>{q.explanation}</p>
+            <p><StudyText text={q.explanation} /></p>
             {q.sources.length > 0 && (
               <p className="muted small">Source: {q.sources.join(", ")}</p>
             )}

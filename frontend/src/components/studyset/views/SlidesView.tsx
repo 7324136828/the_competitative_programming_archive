@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import { req, ValidationError } from "../lib/content";
 import { useLibrary } from "../lib/useLibrary";
 import type { Presentation } from "../types";
@@ -68,7 +69,7 @@ export function SlidesView() {
 
   const details = deck ? (
     <>
-      <p className="details-title">{deck.title}</p>
+      <p className="details-title"><StudyText text={deck.title} /></p>
       <DetailRow label="Slides" value={deck.slides.length} />
       <DetailRow
         label="Bullets"
@@ -92,7 +93,7 @@ export function SlidesView() {
               className={i === index ? "link active" : "link"}
               onClick={() => setIndex(i)}
             >
-              {s.title}
+              <StudyText text={s.title} />
             </button>
           </li>
         ))}
@@ -148,11 +149,11 @@ export function SlidesView() {
       {deck && slide ? (
         <div className="slides-pane">
           <div className="slide-face">
-            <h2>{slide.title}</h2>
-            {slide.subtitle && <p className="slide-subtitle">{slide.subtitle}</p>}
+            <h2><StudyText text={slide.title} /></h2>
+            {slide.subtitle && <p className="slide-subtitle"><StudyText text={slide.subtitle} /></p>}
             <ul className="slide-bullets">
               {slide.bullets.map((bullet, i) => (
-                <li key={i}>{bullet}</li>
+                <li key={i}><StudyText text={bullet} /></li>
               ))}
             </ul>
             <p className="slide-footer">
@@ -172,7 +173,7 @@ export function SlidesView() {
             <div className="notes">
               <h3>Speaker notes</h3>
               <p className={slide.speaker_notes ? "" : "muted"}>
-                {slide.speaker_notes || "(no speaker notes for this slide)"}
+                <StudyText text={slide.speaker_notes || "(no speaker notes for this slide)"} />
               </p>
             </div>
           )}
@@ -185,11 +186,11 @@ export function SlidesView() {
               onClick={next}
             >
               <div className="present-inner">
-                <h2>{slide.title}</h2>
-                {slide.subtitle && <p className="present-subtitle">{slide.subtitle}</p>}
+                <h2><StudyText text={slide.title} /></h2>
+                {slide.subtitle && <p className="present-subtitle"><StudyText text={slide.subtitle} /></p>}
                 <ul>
                   {slide.bullets.map((bullet, i) => (
-                    <li key={i}>{bullet}</li>
+                    <li key={i}><StudyText text={bullet} /></li>
                   ))}
                 </ul>
                 <p className="present-counter">

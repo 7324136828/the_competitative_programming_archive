@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import { generatePodcast } from "../lib/api";
 import { dataUrl, req, ValidationError } from "../lib/content";
 import { useLibrary } from "../lib/useLibrary";
@@ -91,7 +92,7 @@ export function PodcastView() {
 
   const details = episode ? (
     <>
-      <p className="details-title">{episode.episode_title}</p>
+      <p className="details-title"><StudyText text={episode.episode_title} /></p>
       <DetailRow label="Show" value={episode.podcast_show || "n/a"} />
       <DetailRow label="Cast" value={episode.cast.map((member) => member.name).join(", ")} />
       <DetailRow label="Segments" value={episode.script.length} />
@@ -143,8 +144,8 @@ export function PodcastView() {
       {episode ? (
         <article className="scroll pad podcast">
           <header className="podcast-header">
-            <p className="kicker">{episode.podcast_show}</p>
-            <h1>{episode.episode_title}</h1>
+            <p className="kicker"><StudyText text={episode.podcast_show} /></p>
+            <h1><StudyText text={episode.episode_title} /></h1>
             {audioUrl ? (
               <audio key={audioUrl} controls preload="metadata" src={audioUrl}>
                 Your browser does not support audio playback.
@@ -155,11 +156,11 @@ export function PodcastView() {
           </header>
           {episode.script.map((segment, segmentIndex) => (
             <section className="podcast-segment" key={`${segment.segment_name}-${segmentIndex}`}>
-              <h2>{segment.segment_name}</h2>
+              <h2><StudyText text={segment.segment_name} /></h2>
               {segment.scenes.filter((scene) => scene.dialogue.trim()).map((scene, sceneIndex) => (
                 <div className="podcast-turn" key={`${scene.speaker_id}-${sceneIndex}`}>
                   <h3>{names.get(scene.speaker_id) ?? scene.speaker_id}</h3>
-                  <p>{scene.dialogue}</p>
+                  <p><StudyText text={scene.dialogue} /></p>
                 </div>
               ))}
             </section>

@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import { listFlashcardProgress, saveFlashcardProgress } from "../lib/api";
 import { req, ValidationError } from "../lib/content";
 import { shuffle } from "../lib/format";
@@ -255,8 +256,8 @@ export function FlashcardsView() {
 
   const details = set ? (
     <>
-      <p className="details-title">{set.title}</p>
-      <p className="muted small">{set.description}</p>
+      <p className="details-title"><StudyText text={set.title} /></p>
+      <p className="muted small"><StudyText text={set.description} /></p>
       <DetailRow label="Cards" value={set.cards.length} />
       <DetailRow
         label="Types"
@@ -384,10 +385,10 @@ export function FlashcardsView() {
           className={revealed ? "flashcard revealed" : "flashcard"}
           onClick={() => setRevealed(!revealed)}
         >
-          <span className="card-front">{card.front}</span>
+          <span className="card-front"><StudyText text={card.front} /></span>
           {revealed ? (
             <>
-              <span className="card-back">{card.back}</span>
+              <span className="card-back"><StudyText text={card.back} /></span>
               {card.tags.length > 0 && (
                 <span className="muted small">Tags: {card.tags.join(", ")}</span>
               )}

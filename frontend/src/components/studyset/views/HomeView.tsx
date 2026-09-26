@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { StudyText } from "../StudyText";
 import type {
   StudyProgress,
   StudySet,
@@ -55,8 +56,8 @@ function StudySetCard({
           {name.trim().slice(0, 1).toUpperCase() || "S"}
         </span>
         <span className="study-set-copy">
-          <strong>{name}</strong>
-          <span>{detail}</span>
+          <strong><StudyText text={name} /></strong>
+          <span><StudyText text={detail} /></span>
           <span className="study-progress-label">
             {progress ? `${progress.completed} of ${progress.total} mastered (${progress.percent}%)` : "No tracked activities"}
           </span>
@@ -178,8 +179,8 @@ export function HomeView({
                   >
                     <span className="saved-library-chevron" aria-hidden="true">›</span>
                     <span className="saved-library-copy">
-                      <span className="saved-library-title">{upload.originalFilename}</span>
-                      <p>{upload.name}</p>
+                      <span className="saved-library-title"><StudyText text={upload.originalFilename} /></span>
+                      <p><StudyText text={upload.name} /></p>
                     </span>
                   </button>
                   <div className="saved-library-actions">

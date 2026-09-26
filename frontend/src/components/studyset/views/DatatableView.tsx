@@ -8,6 +8,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import { req, ValidationError } from "../lib/content";
 import { download, sortRows, toCsv } from "../lib/format";
 import { useLibrary } from "../lib/useLibrary";
@@ -103,7 +104,7 @@ export function DatatableView() {
 
   const details = table ? (
     <>
-      <p className="details-title">{table.title}</p>
+      <p className="details-title"><StudyText text={table.title} /></p>
       <DetailRow label="Rows" value={table.data.length} />
       <DetailRow label="Columns" value={columns.length} />
       <DetailRow label="Declared fields" value={table.fields.length} />
@@ -113,7 +114,7 @@ export function DatatableView() {
         {table.fields.map((field) => (
           <li key={field.name}>
             <code>{field.name}</code>
-            {field.description && <div className="muted small">{field.description}</div>}
+            {field.description && <div className="muted small"><StudyText text={field.description} /></div>}
           </li>
         ))}
       </ul>
@@ -206,7 +207,7 @@ export function DatatableView() {
                   >
                     {columns.map((column) => (
                       <td key={column} title={row[column]}>
-                        {row[column]}
+                        <StudyText text={row[column]} />
                       </td>
                     ))}
                   </tr>
@@ -226,9 +227,9 @@ export function DatatableView() {
                   <div key={column}>
                     <dt>{column}</dt>
                     {describeField(column) && (
-                      <dd className="muted small">{describeField(column)}</dd>
+                      <dd className="muted small"><StudyText text={describeField(column)} /></dd>
                     )}
-                    <dd>{record[column]}</dd>
+                    <dd><StudyText text={record[column]} /></dd>
                   </div>
                 ))}
               </dl>

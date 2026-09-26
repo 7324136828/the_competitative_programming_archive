@@ -7,6 +7,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import { req, ValidationError } from "../lib/content";
 import { useLibrary } from "../lib/useLibrary";
 import type { MindMap, MindMapNode } from "../types";
@@ -221,7 +222,7 @@ export function MindmapView() {
 
   const details = map ? (
     <>
-      <p className="details-title">{map.name}</p>
+      <p className="details-title"><StudyText text={map.name} /></p>
       <DetailRow label="Main branches" value={map.children.length} />
       <DetailRow label="Total nodes" value={countNodes(map)} />
       <DetailRow label="Depth" value={maxDepth(map)} />
@@ -350,24 +351,40 @@ export function MindmapView() {
                     stroke={palette.stroke}
                     strokeWidth={1.2}
                   />
-                  <text
-                    x={node.x + node.w / 2 + pad}
-                    y={node.y - node.h / 2 + pad + BOX_PAD_Y + LINE_HEIGHT * 0.75}
-                    textAnchor="middle"
-                    fontSize={11}
-                    fontWeight={node.depth <= 1 ? 700 : 400}
-                    fill={palette.text}
-                  >
-                    {node.lines.map((line, i) => (
-                      <tspan
-                        key={i}
-                        x={node.x + node.w / 2 + pad}
-                        dy={i === 0 ? 0 : LINE_HEIGHT}
+                  {node.node.name.includes("$$") ? (
+                    <foreignObject
+                      x={node.x + pad}
+                      y={node.y - node.h / 2 + pad}
+                      width={node.w}
+                      height={node.h}
+                    >
+                      <div
+                        className="mindmap-math"
+                        style={{ color: palette.text, fontWeight: node.depth <= 1 ? 700 : 400 }}
                       >
-                        {line}
-                      </tspan>
-                    ))}
-                  </text>
+                        <StudyText text={node.node.name} />
+                      </div>
+                    </foreignObject>
+                  ) : (
+                    <text
+                      x={node.x + node.w / 2 + pad}
+                      y={node.y - node.h / 2 + pad + BOX_PAD_Y + LINE_HEIGHT * 0.75}
+                      textAnchor="middle"
+                      fontSize={11}
+                      fontWeight={node.depth <= 1 ? 700 : 400}
+                      fill={palette.text}
+                    >
+                      {node.lines.map((line, i) => (
+                        <tspan
+                          key={i}
+                          x={node.x + node.w / 2 + pad}
+                          dy={i === 0 ? 0 : LINE_HEIGHT}
+                        >
+                          {line}
+                        </tspan>
+                      ))}
+                    </text>
+                  )}
                   {node.hasChildren && (
                     <>
                       <circle

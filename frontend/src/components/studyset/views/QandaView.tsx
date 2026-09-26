@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { DetailRow, LibraryShell } from "../LibraryShell";
+import { StudyText } from "../StudyText";
 import {
   createQASession,
   getQASession,
@@ -231,8 +232,8 @@ export function QandaView() {
 
   const details = qa ? (
     <>
-      <p className="details-title">{qa.title}</p>
-      <p className="muted small">{qa.description}</p>
+      <p className="details-title"><StudyText text={qa.title} /></p>
+      <p className="muted small"><StudyText text={qa.description} /></p>
       <DetailRow label="Questions" value={qa.questions.length} />
       <DetailRow label="Required" value={qa.questions.filter((question) => question.required).length} />
       <DetailRow label="File" value={selectedFile ?? "n/a"} />
@@ -266,7 +267,7 @@ export function QandaView() {
     body = (
       <div className="scroll pad qa-review">
         <h2>Q&A history</h2>
-        <p className="muted">Saved responses for {qa.title}</p>
+        <p className="muted">Saved responses for <StudyText text={qa.title} /></p>
         {sessionError ? <p className="bad" role="alert">{sessionError}</p> : null}
         {sessions.length === 0 ? <p className="muted">No saved responses yet.</p> : null}
         {sessions.map((session) => (
@@ -282,8 +283,8 @@ export function QandaView() {
             </div>
             {session.responses.map((response, responseIndex) => (
               <div key={response.id}>
-                <p><strong>{responseIndex + 1}. {response.question}</strong></p>
-                <p className="qa-answer">{response.answer || <span className="muted">No response</span>}</p>
+                <p><strong>{responseIndex + 1}. <StudyText text={response.question} /></strong></p>
+                <p className="qa-answer">{response.answer ? <StudyText text={response.answer} /> : <span className="muted">No response</span>}</p>
               </div>
             ))}
           </section>
@@ -293,8 +294,8 @@ export function QandaView() {
   } else if (!sessionId) {
     body = (
       <div className="placeholder">
-        <h2>{qa.title}</h2>
-        <p className="muted">{qa.description}</p>
+        <h2><StudyText text={qa.title} /></h2>
+        <p className="muted"><StudyText text={qa.description} /></p>
         <p>Your responses are saved in this study set's Q&A history.</p>
         <button type="button" className="primary big" disabled={starting} onClick={() => void begin()}>
           {starting ? "Starting…" : "Start Q&A"}
@@ -315,8 +316,8 @@ export function QandaView() {
         {sessionError ? <p className="bad" role="alert">{sessionError}</p> : null}
         {qa.questions.map((question, questionIndex) => (
           <section className="review" key={question.id}>
-            <h3>{questionIndex + 1}. {question.question}</h3>
-            <p className="qa-answer">{answers[questionIndex] || <span className="muted">No response</span>}</p>
+            <h3>{questionIndex + 1}. <StudyText text={question.question} /></h3>
+            <p className="qa-answer">{answers[questionIndex] ? <StudyText text={answers[questionIndex]} /> : <span className="muted">No response</span>}</p>
           </section>
         ))}
       </div>
@@ -330,7 +331,7 @@ export function QandaView() {
           <span className="muted">{prompt.required ? "Required" : "Optional"}</span>
         </div>
         <progress value={answered} max={qa.questions.length} />
-        <label className="qa-prompt" htmlFor={`qa-${prompt.id}`}>{prompt.question}</label>
+        <label className="qa-prompt" htmlFor={`qa-${prompt.id}`}><StudyText text={prompt.question} /></label>
         <textarea
           id={`qa-${prompt.id}`}
           value={answers[index] ?? ""}
