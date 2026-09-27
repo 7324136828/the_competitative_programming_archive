@@ -124,12 +124,13 @@ test('generatePodcast requests /api/generate_podcast with options', async () => 
     });
   };
 
-  const res = await generatePodcast('ep1.json', { voiceA: 'af_heart', voiceB: 'am_adam' });
+  const res = await generatePodcast('ep1.json', { voiceA: 'af_heart', voiceB: 'am_adam', subject: 'chapter-two' });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/generate_podcast');
   assert.equal(calls[0].options.method, 'POST');
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     podcast_file: 'ep1.json',
+    podcast_subject: 'chapter-two',
     voiceA: 'af_heart',
     voiceB: 'am_adam',
   });

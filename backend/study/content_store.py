@@ -534,17 +534,36 @@ class ContentStore:
         from datetime import datetime, timezone
         return {"generatedAt": datetime.now(timezone.utc).isoformat(), "kinds": result}
 
-    def read_content(self, workspace_id: str, kind: str, filename: str) -> tuple[bytes, str]:
+    def read_content(
+        self, workspace_id: str, kind: str, filename: str, subject: str | None = None,
+    ) -> tuple[bytes, str]:
         with self._connect() as connection:
-            row = connection.execute(
-                "SELECT body, content_type FROM content "
-                "WHERE workspace_id = ? AND kind = ? AND filename = ? "
-                "ORDER BY CASE WHEN subject = '' THEN 0 ELSE 1 END, lower(subject) LIMIT 1",
-                (workspace_id, kind, filename),
-            ).fetchone()
+            if subject is None:
+                row = connection.execute(
+                    "SELECT body, content_type FROM content "
+                    "WHERE workspace_id = ? AND kind = ? AND filename = ? "
+                    "ORDER BY CASE WHEN subject = '' THEN 0 ELSE 1 END, lower(subject) LIMIT 1",
+                    (workspace_id, kind, filename),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT body, content_type FROM content "
+                    "WHERE workspace_id = ? AND kind = ? AND subject = ? AND filename = ? LIMIT 1",
+                    (workspace_id, kind, subject, filename),
+                ).fetchone()
         if row is None:
             raise FileNotFoundError(filename)
         return bytes(row["body"]), str(row["content_type"])
+
+    def save_podcast_audio(self, workspace_id: str, subject: str, filename: str, body: bytes) -> None:
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO content(workspace_id, kind, subject, filename, body, content_type)
+                   VALUES (?, 'podcasts', ?, ?, ?, 'audio/wav')
+                   ON CONFLICT(workspace_id, kind, subject, filename)
+                   DO UPDATE SET body = excluded.body, content_type = excluded.content_type""",
+                (workspace_id, subject, filename, body),
+            )
 
     @staticmethod
     def _qa_session(row: sqlite3.Row) -> dict[str, Any]:

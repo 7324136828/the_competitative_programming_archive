@@ -6,10 +6,11 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import threading
 import uuid
 from urllib.parse import quote, unquote
 from typing import Any
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
@@ -333,14 +334,14 @@ def get_manifest():
 
 
 @router.get("/content/{kind}/{filename:path}")
-def get_content_file(kind: str, filename: str):
+def get_content_file(kind: str, filename: str, subject: str | None = None):
     store = get_content_store()
     active_id = get_active_workspace_id()
     if not active_id:
         raise HTTPException(status_code=404, detail="No active study set selected")
 
     try:
-        body, content_type = store.read_content(active_id, kind, filename)
+        body, content_type = store.read_content(active_id, kind, filename, subject)
         return Response(content=body, media_type=content_type)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail=f"File not found: {filename}")
@@ -583,48 +584,85 @@ async def flashcards_audio(request: Request):
     return {"cards": cards, "audios": audios, "frontVoice": "af_heart", "backVoice": "af_heart"}
 
 
-@router.post("/generate_podcast")
-async def generate_podcast_endpoint(request: Request):
+_podcast_jobs: dict[str, dict[str, Any]] = {}
+_podcast_jobs_lock = threading.Lock()
+
+
+def _render_podcast_job(
+    job_id: str, workspace_id: str, subject: str, podcast_file: str,
+    script_data: dict[str, Any], voice_a: str, voice_b: str,
+) -> None:
+    with _podcast_jobs_lock:
+        _podcast_jobs[job_id]["status"] = "running"
+    try:
+        audio = render_podcast_script(script_data, voice_a, voice_b)
+        audio_name = f"{podcast_file.rsplit('.', 1)[0]}.wav"
+        get_content_store().save_podcast_audio(workspace_id, subject, audio_name, audio)
+    except Exception as error:
+        logger.exception("Podcast generation failed for %s", podcast_file)
+        with _podcast_jobs_lock:
+            _podcast_jobs[job_id].update(status="failed", error=str(error) or "Audio rendering failed")
+    else:
+        with _podcast_jobs_lock:
+            _podcast_jobs[job_id].update(status="completed", audio_file=audio_name)
+
+
+@router.post("/generate_podcast", status_code=202)
+async def generate_podcast_endpoint(request: Request, background_tasks: BackgroundTasks):
     data = await request.json()
     podcast_file = data.get("podcast_file", "")
+    requested_subject = data.get("podcast_subject")
     voice_a = data.get("voiceA", "af_heart")
     voice_b = data.get("voiceB", "am_adam")
-
     store = get_content_store()
     active_id = get_active_workspace_id()
-
+    if not active_id:
+        raise HTTPException(status_code=404, detail="No active study set selected")
+    if not isinstance(podcast_file, str) or not podcast_file.endswith(".json"):
+        raise HTTPException(status_code=422, detail="Select a podcast script to render")
+    if requested_subject is not None and not isinstance(requested_subject, str):
+        raise HTTPException(status_code=422, detail="podcast_subject must be a string")
+    matches = [
+        entry for entry in store.manifest(active_id)["kinds"]["podcasts"]
+        if entry["file"] == podcast_file
+        and (requested_subject is None or (entry["subject"] or "") == requested_subject)
+    ]
+    if not matches:
+        raise HTTPException(status_code=404, detail="Podcast script not found")
+    if len(matches) > 1:
+        raise HTTPException(status_code=422, detail="Choose the podcast's subject folder")
+    subject = matches[0]["subject"] or ""
+    try:
+        body, _ = store.read_content(active_id, "podcasts", podcast_file, subject)
+        script_data = json.loads(body.decode("utf-8-sig"))
+    except (FileNotFoundError, ValueError) as error:
+        raise HTTPException(status_code=422, detail=f"Podcast script could not be read: {error}") from error
+    if not isinstance(script_data, dict) or not isinstance(script_data.get("script"), list):
+        raise HTTPException(status_code=422, detail="Podcast script is invalid")
     job_id = uuid.uuid4().hex
-    if active_id and podcast_file:
-        try:
-            body, _ = store.read_content(active_id, "podcasts", podcast_file)
-            script_data = json.loads(body.decode("utf-8-sig"))
-            combined_wav = await run_in_threadpool(
-                render_podcast_script,
-                script_data,
-                voice_a,
-                voice_b,
-            )
-            # Save audio sidecar
-            stem = podcast_file.rsplit(".", 1)[0]
-            audio_name = f"{stem}.wav"
-            with store._connect() as conn:
-                conn.execute(
-                    "INSERT INTO content(workspace_id, kind, subject, filename, body, content_type) "
-                    "VALUES (?, 'podcasts', '', ?, ?, 'audio/wav') "
-                    "ON CONFLICT(workspace_id, kind, subject, filename) DO UPDATE SET body=excluded.body",
-                    (active_id, audio_name, combined_wav),
-                )
-        except Exception as e:
-            logger.warning("Podcast generation error: %s", e)
-
-    return {"job_id": job_id, "status": "completed"}
+    with _podcast_jobs_lock:
+        _podcast_jobs[job_id] = {"job_id": job_id, "status": "starting"}
+    background_tasks.add_task(
+        _render_podcast_job, job_id, active_id, subject, podcast_file,
+        script_data, voice_a, voice_b,
+    )
+    return {"job_id": job_id, "status": "starting"}
 
 
 @router.get("/generate_podcast")
 def get_podcast_job_status(job_id: str | None = None):
-    return {"job_id": job_id, "status": "completed"}
+    with _podcast_jobs_lock:
+        job = _podcast_jobs.get(job_id or "")
+        if job is None:
+            raise HTTPException(status_code=404, detail="Podcast render job not found")
+        return dict(job)
 
 
 @router.get("/generate_podcast/logs")
 def get_podcast_logs(job_id: str | None = None):
-    return {"logs": ["Rendering podcast turns...", "Concatenating audio segments...", "Complete."]}
+    job = get_podcast_job_status(job_id)
+    if job["status"] == "failed":
+        return {"logs": [f"Audio rendering failed: {job['error']}"]}
+    if job["status"] == "completed":
+        return {"logs": ["Audio rendering completed."]}
+    return {"logs": ["Rendering podcast audio..."]}

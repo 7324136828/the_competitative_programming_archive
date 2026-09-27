@@ -453,6 +453,57 @@ class StudySetApiTests(unittest.TestCase):
         self.assertEqual(self.client.get(file_url).status_code, 404)
         self.assertEqual(self.client.get(url).json()['attachments'], [])
 
+    def test_05bd_podcast_rendering_keeps_audio_with_each_subject_and_reports_failures(self):
+        workspace_id = self.created_workspace_id
+        self.assertEqual(self.client.post('/api/workspace/activate', json={'workspace': workspace_id}).status_code, 200)
+        from backend.study.state import get_content_store
+        store = get_content_store()
+
+        def script(title):
+            return json.dumps({
+                'episode_title': title,
+                'cast': [{'speaker_id': 'host', 'voice_file': 'host.wav'}],
+                'script': [{'segment_name': 'Intro', 'scenes': [
+                    {'speaker_id': 'host', 'dialogue': f'Welcome to {title}.'},
+                ]}],
+            }).encode()
+
+        with store._connect() as connection:
+            for subject in ('first', 'second', 'broken'):
+                connection.execute(
+                    "INSERT INTO content(workspace_id, kind, subject, filename, body, content_type) "
+                    "VALUES (?, 'podcasts', ?, 'episode.json', ?, 'application/json')",
+                    (workspace_id, subject, script(subject)),
+                )
+
+        for subject in ('first', 'second'):
+            with patch('backend.study.router.render_podcast_script', return_value=f'WAV-{subject}'.encode()):
+                started = self.client.post('/api/generate_podcast', json={
+                    'podcast_file': 'episode.json', 'podcast_subject': subject,
+                })
+            self.assertEqual(started.status_code, 202, started.text)
+            status = self.client.get('/api/generate_podcast', params={'job_id': started.json()['job_id']})
+            self.assertEqual(status.json()['status'], 'completed')
+            audio = self.client.get('/api/content/podcasts/episode.wav', params={'subject': subject})
+            self.assertEqual(audio.content, f'WAV-{subject}'.encode())
+
+        manifest = self.client.get('/api/content/manifest').json()['kinds']['podcasts']
+        self.assertEqual(
+            {item['subject']: item['sidecars'] for item in manifest},
+            {'first': ['episode.wav'], 'second': ['episode.wav'], 'broken': []},
+        )
+        self.assertEqual(self.client.post('/api/generate_podcast', json={'podcast_file': 'episode.json'}).status_code, 422)
+
+        with patch('backend.study.router.render_podcast_script', side_effect=RuntimeError('speech service unavailable')):
+            failed = self.client.post('/api/generate_podcast', json={
+                'podcast_file': 'episode.json', 'podcast_subject': 'broken',
+            })
+        self.assertEqual(failed.status_code, 202)
+        failure = self.client.get('/api/generate_podcast', params={'job_id': failed.json()['job_id']}).json()
+        self.assertEqual(failure['status'], 'failed')
+        self.assertIn('speech service unavailable', failure['error'])
+        self.assertEqual(self.client.get('/api/content/podcasts/episode.wav', params={'subject': 'broken'}).status_code, 404)
+
     def test_05c_flashcard_audio_matches_frontend_contract(self):
         with patch('backend.study.router.synthesize_wav', return_value=b'RIFF-test-wave'):
             response = self.client.post(
