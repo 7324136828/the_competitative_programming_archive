@@ -8,7 +8,10 @@ import json
 import logging
 import os
 import shutil
+import sqlite3
 import tempfile
+import threading
+import time
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -20,8 +23,14 @@ logger = logging.getLogger("uvicorn.error")
 
 # Global state
 _store: ContentStore | None = None
+_store_lock = threading.Lock()
 _active_workspace_id: str | None = None
 _upload_progress: dict[str, dict[str, Any]] = {}
+_upload_import_lock = threading.Lock()
+
+
+def _is_database_locked(error: BaseException) -> bool:
+    return isinstance(error, sqlite3.OperationalError) and "locked" in str(error).casefold()
 
 
 def _manifest_workspace_root(path_value: Any) -> str:
@@ -39,10 +48,12 @@ def _manifest_workspace_root(path_value: Any) -> str:
 def get_content_store() -> ContentStore:
     global _store
     if _store is None:
-        from ..jira.db import db
-        db_path = Path(db.path) if db.path and db.path != ":memory:" else Path(tempfile.gettempdir()) / "study_sets.sqlite"
-        voice_dir = db_path.parent / "voices"
-        _store = ContentStore(db_path, voice_dir)
+        with _store_lock:
+            if _store is None:
+                from ..jira.db import db
+                db_path = Path(db.path) if db.path and db.path != ":memory:" else Path(tempfile.gettempdir()) / "study_sets.sqlite"
+                voice_dir = db_path.parent / "voices"
+                _store = ContentStore(db_path, voice_dir)
     return _store
 
 
@@ -89,9 +100,9 @@ def get_upload_progress(upload_id: str) -> dict[str, Any]:
         upload_id,
         {
             "id": upload_id,
-            "state": "completed",
-            "percent": 100,
-            "message": "Ready",
+            "state": "pending",
+            "percent": 0,
+            "message": "Waiting for upload",
             "currentWorkspace": None,
             "completedWorkspaces": 0,
             "totalWorkspaces": 0,
@@ -187,14 +198,44 @@ def extract_and_import_zip(zip_bytes: bytes, original_filename: str, upload_id: 
             )
 
         store = get_content_store()
-        imported_id = store.import_workspace_tree(
-            manifest_root,
-            original_filename,
-            upload_id=upload_id,
-            name=display_name,
-            names_map=manifest_names,
-            progress=report_progress,
-        )
+        if not _upload_import_lock.acquire(blocking=False):
+            set_upload_progress(
+                upload_id,
+                "queued",
+                50,
+                "Waiting for another database import",
+                completed_workspaces=0,
+                total_workspaces=total_workspaces,
+            )
+            _upload_import_lock.acquire()
+        try:
+            retry_delays = (0.5, 1.0, 2.0)
+            for attempt in range(len(retry_delays) + 1):
+                try:
+                    imported_id = store.import_workspace_tree(
+                        manifest_root,
+                        original_filename,
+                        upload_id=upload_id,
+                        name=display_name,
+                        names_map=manifest_names,
+                        progress=report_progress,
+                    )
+                    break
+                except sqlite3.OperationalError as error:
+                    if not _is_database_locked(error) or attempt >= len(retry_delays):
+                        raise
+                    delay = retry_delays[attempt]
+                    set_upload_progress(
+                        upload_id,
+                        "retrying",
+                        50,
+                        f"Database busy; retrying import ({attempt + 1}/{len(retry_delays)})",
+                        completed_workspaces=0,
+                        total_workspaces=total_workspaces,
+                    )
+                    time.sleep(delay)
+        finally:
+            _upload_import_lock.release()
         set_upload_progress(
             upload_id,
             "completed",

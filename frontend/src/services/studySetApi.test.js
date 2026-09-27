@@ -7,6 +7,7 @@ import {
   unlinkStory,
   generatePodcast,
 } from '../components/studyset/lib/api.ts';
+import { getStudyNote, saveStudyNote } from '../components/studyset/studyPersistenceApi.ts';
 
 const originalFetch = globalThis.fetch;
 
@@ -126,4 +127,21 @@ test('generatePodcast requests /api/generate_podcast with options', async () => 
     voiceB: 'am_adam',
   });
   assert.equal(res.job_id, 'job-123');
+});
+
+test('study note API reads and persists notes for an explicit workspace', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return jsonResponse({ workspaceId: 'ws-1', text: options.body ? 'Remember BFS' : '', updatedAt: null });
+  };
+
+  await getStudyNote('ws-1');
+  const saved = await saveStudyNote('ws-1', 'Remember BFS');
+
+  assert.equal(calls[0].url, '/api/workspace/study-sets/ws-1/note');
+  assert.equal(calls[1].url, '/api/workspace/study-sets/ws-1/note');
+  assert.equal(calls[1].options.method, 'PUT');
+  assert.deepEqual(JSON.parse(calls[1].options.body), { text: 'Remember BFS' });
+  assert.equal(saved.text, 'Remember BFS');
 });

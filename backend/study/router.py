@@ -347,6 +347,30 @@ def get_content_file(kind: str, filename: str):
 
 
 # --------------------------------------------------------------------------
+# Study Notes
+# --------------------------------------------------------------------------
+
+@router.get("/workspace/study-sets/{workspace_id}/note")
+def get_study_note(workspace_id: str):
+    try:
+        return get_content_store().get_note(workspace_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error.args[0])) from error
+
+
+@router.put("/workspace/study-sets/{workspace_id}/note")
+async def save_study_note(workspace_id: str, request: Request):
+    data = await request.json()
+    text = data.get("text")
+    if not isinstance(text, str):
+        raise HTTPException(status_code=422, detail="text must be a string")
+    try:
+        return get_content_store().save_note(workspace_id, text)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error.args[0])) from error
+
+
+# --------------------------------------------------------------------------
 # QA Sessions
 # --------------------------------------------------------------------------
 
