@@ -20,6 +20,7 @@ import { StudySetActivity } from './StudySetActivity';
 export interface ActivityHandlerProps {
   issue: Issue;
   onStatusUpdated?: (newStatus: string) => void;
+  onOpenStudySet?: (studySetId: string | null | undefined, targetTab: string) => Promise<void>;
   onClose: () => void;
 }
 
@@ -41,6 +42,7 @@ interface ActivityScreenProps {
   onOpenStory?: (issueId: string) => void;
   onCreateStory?: (problemId: number) => Promise<void>;
   onStartStory?: (issue: Issue) => Promise<void>;
+  onOpenStudySet?: (studySetId: string | null | undefined, targetTab: string) => Promise<void>;
   onStatusUpdated?: (issueId: string, newStatus: string) => void;
 }
 
@@ -50,6 +52,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
   onOpenStory,
   onCreateStory,
   onStartStory,
+  onOpenStudySet,
   onStatusUpdated,
 }) => {
   const [currentStatus, setCurrentStatus] = useState<string>(issue?.status || 'To Do');
@@ -248,6 +251,7 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
           key={issue.id}
           issue={{ ...issue, status: currentStatus }}
           onStatusUpdated={handleStatusChange}
+          onOpenStudySet={onOpenStudySet}
           onClose={onClose}
         />
       </main>

@@ -17,23 +17,33 @@ import { api } from '../../api/client';
 interface StudySetActivityProps {
   issue: Issue;
   onStatusUpdated?: (newStatus: string) => void;
+  onOpenStudySet?: (studySetId: string | null | undefined, targetTab: string) => Promise<void>;
   onClose: () => void;
 }
 
 export const StudySetActivity: React.FC<StudySetActivityProps> = ({
   issue,
   onStatusUpdated,
-  onClose,
+  onOpenStudySet,
 }) => {
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false);
+  const [isOpeningStudySet, setIsOpeningStudySet] = useState(false);
+  const [navigationError, setNavigationError] = useState<string | null>(null);
   const isDone = issue.status === 'Done';
 
-  const handleLaunchStudySet = (targetTab = 'home') => {
-    if (issue.study_set_id) {
-      localStorage.setItem('active_study_set_id', issue.study_set_id);
+  const handleLaunchStudySet = async (targetTab = 'home') => {
+    setNavigationError(null);
+    setIsOpeningStudySet(true);
+    try {
+      if (!onOpenStudySet) {
+        throw new Error('Study set navigation is unavailable. Please try again.');
+      }
+      await onOpenStudySet(issue.study_set_id, targetTab);
+    } catch (error) {
+      setNavigationError(error instanceof Error ? error.message : 'Could not open the linked study set.');
+    } finally {
+      setIsOpeningStudySet(false);
     }
-    window.location.hash = '#studyset';
-    onClose();
   };
 
   const handleComplete = async () => {
@@ -57,6 +67,11 @@ export const StudySetActivity: React.FC<StudySetActivityProps> = ({
 
   return (
     <div className="flex-1 flex flex-col h-full bg-[#18181b] text-gray-100 overflow-y-auto p-6 md:p-8 space-y-6">
+      {(!issue.study_set_id || navigationError) && (
+        <div role="alert" className="p-3 rounded-lg border border-amber-700 bg-amber-950/40 text-amber-200 text-sm">
+          {navigationError || 'No study set is linked to this story.'}
+        </div>
+      )}
       {/* Hero Header */}
       <div className="p-6 rounded-2xl bg-gradient-to-br from-emerald-950/60 to-gray-900 border border-emerald-800/60 shadow-xl flex flex-col md:flex-row md:items-center justify-between gap-6">
         <div className="space-y-2 max-w-xl">
@@ -75,9 +90,10 @@ export const StudySetActivity: React.FC<StudySetActivityProps> = ({
           <button
             type="button"
             onClick={() => handleLaunchStudySet('home')}
-            className="w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm bg-emerald-500 hover:bg-emerald-400 text-gray-950 shadow-lg shadow-emerald-500/20 transition flex items-center justify-center space-x-2"
+            disabled={!issue.study_set_id || isOpeningStudySet}
+            className="w-full sm:w-auto px-5 py-3 rounded-xl font-bold text-sm bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 disabled:cursor-not-allowed text-gray-950 shadow-lg shadow-emerald-500/20 transition flex items-center justify-center space-x-2"
           >
-            <span>Open in Study Set Tab</span>
+            <span>{isOpeningStudySet ? 'Opening study set…' : 'Open in Study Set Tab'}</span>
             <ArrowRight className="w-4 h-4" />
           </button>
 
@@ -102,6 +118,7 @@ export const StudySetActivity: React.FC<StudySetActivityProps> = ({
           <button
             type="button"
             onClick={() => handleLaunchStudySet('quizzes')}
+            disabled={!issue.study_set_id || isOpeningStudySet}
             className="p-4 text-left rounded-xl bg-gray-900/60 hover:bg-gray-900 border border-gray-800 hover:border-emerald-500/60 transition group flex flex-col justify-between space-y-3"
           >
             <div className="flex items-center justify-between">
@@ -119,6 +136,7 @@ export const StudySetActivity: React.FC<StudySetActivityProps> = ({
           <button
             type="button"
             onClick={() => handleLaunchStudySet('flashcards')}
+            disabled={!issue.study_set_id || isOpeningStudySet}
             className="p-4 text-left rounded-xl bg-gray-900/60 hover:bg-gray-900 border border-gray-800 hover:border-emerald-500/60 transition group flex flex-col justify-between space-y-3"
           >
             <div className="flex items-center justify-between">
@@ -136,6 +154,7 @@ export const StudySetActivity: React.FC<StudySetActivityProps> = ({
           <button
             type="button"
             onClick={() => handleLaunchStudySet('mindmaps')}
+            disabled={!issue.study_set_id || isOpeningStudySet}
             className="p-4 text-left rounded-xl bg-gray-900/60 hover:bg-gray-900 border border-gray-800 hover:border-emerald-500/60 transition group flex flex-col justify-between space-y-3"
           >
             <div className="flex items-center justify-between">
@@ -153,6 +172,7 @@ export const StudySetActivity: React.FC<StudySetActivityProps> = ({
           <button
             type="button"
             onClick={() => handleLaunchStudySet('podcasts')}
+            disabled={!issue.study_set_id || isOpeningStudySet}
             className="p-4 text-left rounded-xl bg-gray-900/60 hover:bg-gray-900 border border-gray-800 hover:border-emerald-500/60 transition group flex flex-col justify-between space-y-3"
           >
             <div className="flex items-center justify-between">
@@ -170,6 +190,7 @@ export const StudySetActivity: React.FC<StudySetActivityProps> = ({
           <button
             type="button"
             onClick={() => handleLaunchStudySet('reports')}
+            disabled={!issue.study_set_id || isOpeningStudySet}
             className="p-4 text-left rounded-xl bg-gray-900/60 hover:bg-gray-900 border border-gray-800 hover:border-emerald-500/60 transition group flex flex-col justify-between space-y-3"
           >
             <div className="flex items-center justify-between">
@@ -187,6 +208,7 @@ export const StudySetActivity: React.FC<StudySetActivityProps> = ({
           <button
             type="button"
             onClick={() => handleLaunchStudySet('qanda')}
+            disabled={!issue.study_set_id || isOpeningStudySet}
             className="p-4 text-left rounded-xl bg-gray-900/60 hover:bg-gray-900 border border-gray-800 hover:border-emerald-500/60 transition group flex flex-col justify-between space-y-3"
           >
             <div className="flex items-center justify-between">
