@@ -50,10 +50,13 @@ def run_automation_trigger(event_type: str, issue_id: str, project_id: str, acto
                         db.run('INSERT INTO comments (id, issue_id, author_id, body) VALUES (?, ?, ?, ?)',
                                new_id('c_auto'), issue_id, comment_author, act['text'])
                     elif act.get('action') == 'set_status' and act.get('target'):
+                        from .issues import _save_status_and_dates
+                        from .history import get_status_category
                         previous = issue['status']
-                        db.run(f'UPDATE issues SET status = ?, updated_at = {SQL_NOW} WHERE id = ?',
-                               act['target'], issue_id)
-                        issue['status'] = act['target']
+                        _save_status_and_dates(issue, act['target'],
+                                               get_status_category(project_id, previous),
+                                               get_status_category(project_id, act['target']))
+                        issue = db.q1('SELECT * FROM issues WHERE id = ?', issue_id)
                         record_status_change(issue_id, project_id, previous, act['target'],
                                              changed_by=actor_id, source='automation')
                 details = f"Executed {len(actions)} action(s): {', '.join(a.get('action', '') for a in actions)}"

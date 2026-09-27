@@ -24,6 +24,8 @@ import { PodcastView } from "./views/PodcastView";
 import { HomeView } from "./views/HomeView";
 import { NotesView } from "./views/NotesView";
 import { AssociateStoryModal } from "./AssociateStoryModal";
+import { createStoryForStudySet } from "./lib/api";
+import { api } from "../../api/client";
 import { UploadProgressList } from "./UploadProgressList";
 import {
   getWorkspaceStatus,
@@ -85,6 +87,7 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [associatingSet, setAssociatingSet] = useState<StudySet | WorkspaceOption | null>(null);
   const [isAssociateModalOpen, setIsAssociateModalOpen] = useState(false);
+  const [isStartingStory, setIsStartingStory] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   const uploadInput = useRef<HTMLInputElement>(null);
@@ -174,6 +177,23 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
       setWorkspaceError(e.message || "Failed to load study set");
     } finally {
       setWorkspaceAction(null);
+    }
+  };
+
+  const handleStartStory = async (studySet: WorkspaceOption) => {
+    setIsStartingStory(true);
+    setWorkspaceError("");
+    try {
+      const storyId = studySet.story?.id ||
+        (await createStoryForStudySet(studySet.id, `Study: ${studySet.name}`, projectId || undefined)).issue.id;
+      await api.startStory(storyId);
+      await refreshWorkspace();
+      await refreshUploads();
+    } catch (e: any) {
+      setWorkspaceError(e.message || "Failed to start story");
+      await refreshWorkspace();
+    } finally {
+      setIsStartingStory(false);
     }
   };
 
@@ -336,6 +356,18 @@ export const StudySetApp: React.FC<StudySetAppProps> = ({
                 <span>Link Story</span>
               </button>
             ) : null}
+
+            {activeOption && (!activeStory || activeStory.status === "To Do") && (
+              <button
+                type="button"
+                onClick={() => handleStartStory(activeOption)}
+                disabled={isStartingStory}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-60"
+                title={activeStory ? "Start linked story" : "Create and start a story for this study set"}
+              >
+                {isStartingStory ? "Starting…" : "Start story"}
+              </button>
+            )}
 
             {activeOption && (
               <div

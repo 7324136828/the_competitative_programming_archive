@@ -238,6 +238,14 @@ const MainApp = () => {
             closeActivity();
             openIssueDetail(story.id);
           }}
+          onStartStory={async (issue) => {
+            const story = String(issue.id).startsWith('problem-')
+              ? await handleCreateStoryForProblem(issue.problem_id)
+              : issue;
+            const started = await api.startStory(story.id);
+            openActivity(started);
+            triggerRefresh();
+          }}
           onStatusUpdated={handleActivityStatusUpdated}
         />
       )}

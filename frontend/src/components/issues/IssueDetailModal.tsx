@@ -284,6 +284,12 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
     }
   };
 
+  const setToday = (field: 'start' | 'due') => {
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    void handleDateChange(field, today);
+  };
+
   // J-18: Version
   const handleVersionChange = async (versionId: string) => {
     try {
@@ -1242,18 +1248,22 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
                     disabled={!canEdit}
                     value={issue.start_date || ''}
                     onChange={e => handleDateChange('start', e.target.value)}
+                    style={{ colorScheme: 'light' }}
                     className="w-full px-2.5 py-1 bg-white border border-gray-300 rounded text-xs text-gray-800 outline-none disabled:bg-gray-100"
                   />
+                  {canEdit && <button type="button" onClick={() => setToday('start')} className="mt-1 text-[10px] text-blue-700 hover:underline">Today</button>}
                 </div>
                 <div>
-                  <span className="text-[10px] text-gray-400 block mb-0.5">Due Date</span>
+                  <span className="text-[10px] text-gray-400 block mb-0.5">Finish Date</span>
                   <input
                     type="date"
                     disabled={!canEdit}
                     value={issue.due_date || ''}
                     onChange={e => handleDateChange('due', e.target.value)}
+                    style={{ colorScheme: 'light' }}
                     className="w-full px-2.5 py-1 bg-white border border-gray-300 rounded text-xs text-gray-800 outline-none disabled:bg-gray-100"
                   />
+                  {canEdit && <button type="button" onClick={() => setToday('due')} className="mt-1 text-[10px] text-blue-700 hover:underline">Today</button>}
                 </div>
               </div>
             </div>

@@ -10,11 +10,13 @@
 import json
 import unittest
 import tempfile
+from datetime import date
 from pathlib import Path
 from backend.app import create_unified_app
 from fastapi.testclient import TestClient
 from backend.jira.db import db
 from backend.jira.seed import seed_demo_data
+from backend.jira.services.automation import run_automation_trigger
 
 
 class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
@@ -39,6 +41,89 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         archive_app.extensions['audio_store'].shutdown()
         db.reopen(':memory:')
         cls.temporary.cleanup()
+
+    def test_story_start_and_finish_dates_follow_status_transitions(self):
+        today = date.today().isoformat()
+        headers = {'x-user-id': 'u_alex'}
+        story_res = self.client.post('/api/issues', headers=headers, json={
+            'projectId': 'proj_cp', 'type': 'Story', 'storyType': 'coding',
+            'summary': 'PROJ-10 date transition test',
+        })
+        self.assertEqual(story_res.status_code, 201)
+        story = story_res.json()
+        story_id = story['id']
+        self.assertIsNone(story['start_date'])
+        self.assertIsNone(story['due_date'])
+
+        started = self.client.post(f'/api/issues/{story_id}/start', headers=headers)
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(started.json()['status'], 'In Progress')
+        self.assertEqual(started.json()['start_date'], today)
+        self.assertIsNone(started.json()['due_date'])
+
+        dated = self.client.post(f'/api/issues/{story_id}/dates', headers=headers,
+                                 json={'startDate': today, 'dueDate': today})
+        self.assertEqual(dated.status_code, 200)
+        self.assertEqual(dated.json()['start_date'], today)
+        self.assertEqual(dated.json()['due_date'], today)
+
+        submitted = self.client.post(f'/api/issues/{story_id}/submission', headers=headers,
+                                     json={'verdict': 'Accepted'})
+        self.assertEqual(submitted.status_code, 200)
+        finished = self.client.get(f'/api/issues/{story_id}').json()
+        self.assertEqual(finished['status'], 'Done')
+        self.assertEqual(finished['start_date'], today)
+        self.assertEqual(finished['due_date'], today)
+
+        reopened = self.client.post(f'/api/issues/{story_id}/status', headers=headers,
+                                    json={'status': 'To Do'})
+        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.json()['start_date'], today)
+        self.assertIsNone(reopened.json()['due_date'])
+
+    def test_study_story_can_start_from_to_do(self):
+        headers = {'x-user-id': 'u_alex'}
+        story = self.client.post('/api/issues', headers=headers, json={
+            'projectId': 'proj_cp', 'type': 'Story', 'storyType': 'study',
+            'summary': 'PROJ-10 study start test',
+        }).json()
+        started = self.client.post(f"/api/issues/{story['id']}/start", headers=headers)
+        self.assertEqual(started.status_code, 200)
+        self.assertEqual(started.json()['status'], 'In Progress')
+        self.assertEqual(started.json()['start_date'], date.today().isoformat())
+        reviewing = self.client.post(f"/api/issues/{story['id']}/status", headers=headers,
+                                     json={'status': 'In Review'})
+        self.assertEqual(reviewing.status_code, 200)
+        self.assertIsNone(reviewing.json()['due_date'])
+        finished = self.client.post(f"/api/issues/{story['id']}/status", headers=headers,
+                                    json={'status': 'Done'})
+        self.assertEqual(finished.status_code, 200)
+        self.assertEqual(finished.json()['due_date'], date.today().isoformat())
+
+    def test_automation_status_change_sets_story_dates(self):
+        headers = {'x-user-id': 'u_alex'}
+        story = self.client.post('/api/issues', headers=headers, json={
+            'projectId': 'proj_cp', 'type': 'Story', 'storyType': 'study',
+            'summary': 'PROJ-10 automation date test',
+        }).json()
+        rule_id = 'rule_proj10_story_dates'
+        db.run(
+            """INSERT INTO automation_rules
+               (id, project_id, name, trigger_event, conditions_json, actions_json, is_enabled)
+               VALUES (?, ?, ?, ?, ?, ?, 1)""",
+            rule_id, 'proj_cp', 'PROJ-10 date test', 'ASSIGNED',
+            json.dumps([{'field': 'summary', 'operator': 'equals', 'value': story['summary']}]),
+            json.dumps([{'action': 'set_status', 'target': 'Done'}]),
+        )
+        try:
+            result = run_automation_trigger('ASSIGNED', story['id'], 'proj_cp', 'u_alex')
+            self.assertEqual(result[0]['status'], 'SUCCESS')
+            finished = self.client.get(f"/api/issues/{story['id']}").json()
+            self.assertEqual(finished['status'], 'Done')
+            self.assertEqual(finished['start_date'], date.today().isoformat())
+            self.assertEqual(finished['due_date'], date.today().isoformat())
+        finally:
+            db.run('DELETE FROM automation_rules WHERE id = ?', rule_id)
 
     def test_epics_features_and_stories_hierarchy(self):
         # 1. Epics: set of problem sets created by user

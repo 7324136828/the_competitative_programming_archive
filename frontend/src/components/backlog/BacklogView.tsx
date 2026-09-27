@@ -330,14 +330,14 @@ export const BacklogView: React.FC = () => {
               value={newSprintName}
               onChange={e => setNewSprintName(e.target.value)}
               placeholder="Sprint name (e.g. Sprint 16 - Scalability)"
-              className="px-3 py-1.5 border border-gray-300 rounded outline-none focus:ring-1 focus:ring-blue-500"
+              className="px-3 py-1.5 bg-white text-gray-900 placeholder:text-gray-400 border border-gray-300 rounded outline-none focus:ring-1 focus:ring-blue-500"
             />
             <input
               type="text"
               value={newSprintGoal}
               onChange={e => setNewSprintGoal(e.target.value)}
               placeholder="Sprint goal..."
-              className="px-3 py-1.5 border border-gray-300 rounded outline-none focus:ring-1 focus:ring-blue-500"
+              className="px-3 py-1.5 bg-white text-gray-900 placeholder:text-gray-400 border border-gray-300 rounded outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
           <div className="flex justify-end space-x-2">

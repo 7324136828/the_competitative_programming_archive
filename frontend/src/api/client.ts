@@ -176,6 +176,8 @@ export const api = {
 
   updateStatus: (id: string, status: string) =>
     apiRequest(`/issues/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) }),
+  startStory: (id: string) =>
+    apiRequest(`/issues/${id}/start`, { method: 'POST' }),
 
   getComments: (id: string) => apiRequest(`/issues/${id}/comments`),
   addComment: (id: string, body: string) =>

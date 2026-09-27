@@ -40,6 +40,7 @@ interface ActivityScreenProps {
   onClose: () => void;
   onOpenStory?: (issueId: string) => void;
   onCreateStory?: (problemId: number) => Promise<void>;
+  onStartStory?: (issue: Issue) => Promise<void>;
   onStatusUpdated?: (issueId: string, newStatus: string) => void;
 }
 
@@ -48,16 +49,19 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
   onClose,
   onOpenStory,
   onCreateStory,
+  onStartStory,
   onStatusUpdated,
 }) => {
   const [currentStatus, setCurrentStatus] = useState<string>(issue?.status || 'To Do');
   const [isCreatingStory, setIsCreatingStory] = useState(false);
+  const [isStartingStory, setIsStartingStory] = useState(false);
   const [storyError, setStoryError] = useState<string | null>(null);
 
   useEffect(() => {
     if (issue) {
       setCurrentStatus(issue.status);
       setIsCreatingStory(false);
+      setIsStartingStory(false);
       setStoryError(null);
     }
   }, [issue?.id, issue?.status]);
@@ -92,6 +96,19 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
     } catch (error) {
       setStoryError(error instanceof Error ? error.message : 'Unable to create a story for this problem.');
       setIsCreatingStory(false);
+    }
+  };
+
+  const handleStartStory = async () => {
+    if (!onStartStory || !issue) return;
+    setIsStartingStory(true);
+    setStoryError(null);
+    try {
+      await onStartStory(issue);
+    } catch (error) {
+      setStoryError(error instanceof Error ? error.message : 'Unable to start this story.');
+    } finally {
+      setIsStartingStory(false);
     }
   };
 
@@ -158,6 +175,16 @@ export const ActivityScreen: React.FC<ActivityScreenProps> = ({
             >
               <BookOpen className="w-3.5 h-3.5" />
               <span>{isCreatingStory ? 'Creating…' : 'Create a story'}</span>
+            </button>
+          )}
+          {onStartStory && issue.type === 'Story' && currentStatus === 'To Do' && (
+            <button
+              type="button"
+              onClick={handleStartStory}
+              disabled={isStartingStory || isCreatingStory}
+              className="inline-flex items-center px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white text-xs font-semibold transition"
+            >
+              {isStartingStory ? 'Starting…' : 'Start story'}
             </button>
           )}
           {storyError && <span className="text-xs text-red-300" role="alert">{storyError}</span>}

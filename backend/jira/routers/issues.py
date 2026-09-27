@@ -478,6 +478,17 @@ def status(id: str, request: Request, body: dict):
         return JSONResponse({'error': str(err)}, 400)
 
 
+@router.post('/{id}/start')
+def start_story(id: str, request: Request):
+    user_id = resolve_acting_user_id(request)
+    if not can_edit_issue(user_id):
+        return JSONResponse({'error': 'Permission denied: Viewer cannot start stories'}, 403)
+    try:
+        return svc.start_story(id, user_id)
+    except Exception as err:
+        return JSONResponse({'error': str(err)}, 400)
+
+
 @router.get('/{id}/comments')
 def comments(id: str):
     return svc.get_comments(id)
