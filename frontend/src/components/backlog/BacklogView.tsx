@@ -39,13 +39,13 @@ export const BacklogView: React.FC = () => {
         api.getSprints(currentProject.id),
         api.getIssues({
           projectId: currentProject.id,
-          type: 'Story',
+          types: 'Story,Bug,Task',
           sprintAssigned: true,
           compact: true,
         }),
         api.getIssues({
           projectId: currentProject.id,
-          type: 'Story',
+          types: 'Story,Bug,Task',
           sprintId: 'none',
           compact: true,
           page: backlogPage,
@@ -217,11 +217,11 @@ export const BacklogView: React.FC = () => {
         )}
 
         <TypeIcon type={issue.type} />
-        {issue.story_type && <StoryTypeBadge storyType={issue.story_type} />}
+        {issue.type === 'Story' && issue.story_type && <StoryTypeBadge storyType={issue.story_type} />}
         <span className="font-semibold text-gray-500 hover:text-[#0052CC] shrink-0 font-mono text-[11px]">
           {issue.key}
         </span>
-        <button
+        {issue.type === 'Story' && <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
@@ -239,7 +239,7 @@ export const BacklogView: React.FC = () => {
           title={issue.story_type === 'study' ? 'Open Study Set' : 'Open Activity Screen'}
         >
           {issue.story_type === 'study' ? 'Study Set ↗' : 'Activity ↗'}
-        </button>
+        </button>}
         <span className="text-gray-900 font-medium truncate">{issue.summary}</span>
       </div>
 
@@ -297,7 +297,7 @@ export const BacklogView: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-[#172B4D]">Backlog</h1>
-          <p className="text-xs text-gray-500 mt-0.5">All stories are planned here; unsprinted work is paged below.</p>
+          <p className="text-xs text-gray-500 mt-0.5">Stories, bugs, and tasks are planned here; unsprinted work is paged below.</p>
         </div>
 
         {canEdit && (
@@ -330,14 +330,14 @@ export const BacklogView: React.FC = () => {
               value={newSprintName}
               onChange={e => setNewSprintName(e.target.value)}
               placeholder="Sprint name (e.g. Sprint 16 - Scalability)"
-              className="px-3 py-1.5 border border-gray-300 rounded outline-none focus:ring-1 focus:ring-blue-500"
+              className="px-3 py-1.5 bg-white text-gray-900 placeholder:text-gray-400 border border-gray-300 rounded outline-none focus:ring-1 focus:ring-blue-500"
             />
             <input
               type="text"
               value={newSprintGoal}
               onChange={e => setNewSprintGoal(e.target.value)}
               placeholder="Sprint goal..."
-              className="px-3 py-1.5 border border-gray-300 rounded outline-none focus:ring-1 focus:ring-blue-500"
+              className="px-3 py-1.5 bg-white text-gray-900 placeholder:text-gray-400 border border-gray-300 rounded outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
           <div className="flex justify-end space-x-2">
@@ -456,7 +456,7 @@ export const BacklogView: React.FC = () => {
               {expandedSprints['backlog'] ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
             <span className="font-bold text-xs text-[#172B4D]">Backlog</span>
-            <span className="text-[11px] text-gray-500 font-normal">{backlogTotal} stories</span>
+            <span className="text-[11px] text-gray-500 font-normal">{backlogTotal} issues</span>
           </div>
 
           <span className="text-xs font-semibold text-gray-600">

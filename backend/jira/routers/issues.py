@@ -253,7 +253,8 @@ def cross_team_dependencies():
 def list_issues(request: Request, projectId: str | None = None, query: str | None = None,
                 assigneeId: str | None = None, status: str | None = None,
                 statusNot: str | None = None, priority: str | None = None,
-                type: str | None = None, sprintId: str | None = None,
+                type: str | None = None, types: str | None = None,
+                sprintId: str | None = None,
                 versionId: str | None = None, unassigned: str | None = None,
                 sprintAssigned: bool = False, board: bool = False,
                 compact: bool = False, page: int | None = None,
@@ -267,6 +268,7 @@ def list_issues(request: Request, projectId: str | None = None, query: str | Non
             'statusNot': statusNot,
             'priority': priority,
             'type': type,
+            'types': types,
             'versionId': versionId,
             'unassigned': unassigned == 'true',
             'sprintAssigned': sprintAssigned,
@@ -474,6 +476,17 @@ def status(id: str, request: Request, body: dict):
         return JSONResponse({'error': 'Permission denied: Viewer cannot update status'}, 403)
     try:
         return svc.update_issue_status(id, body.get('status'), user_id)
+    except Exception as err:
+        return JSONResponse({'error': str(err)}, 400)
+
+
+@router.post('/{id}/start')
+def start_story(id: str, request: Request):
+    user_id = resolve_acting_user_id(request)
+    if not can_edit_issue(user_id):
+        return JSONResponse({'error': 'Permission denied: Viewer cannot start stories'}, 403)
+    try:
+        return svc.start_story(id, user_id)
     except Exception as err:
         return JSONResponse({'error': str(err)}, 400)
 

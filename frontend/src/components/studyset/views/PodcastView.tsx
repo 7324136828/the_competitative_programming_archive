@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { LibraryShell, DetailRow } from "../LibraryShell";
 import { StudyText } from "../StudyText";
-import { generatePodcast } from "../lib/api";
+import { generatePodcast, getPodcastStatus } from "../lib/api";
 import { dataUrl, req, ValidationError } from "../lib/content";
 import { useLibrary } from "../lib/useLibrary";
 import type { PodcastEpisode } from "../types";
@@ -59,30 +59,46 @@ function parsePodcast(raw: Record<string, unknown>, where: string): PodcastEpiso
 
 export function PodcastView() {
   const lib = useLibrary<PodcastEpisode>("podcasts", parsePodcast);
-  const [refreshing, setRefreshing] = useState(false);
-  const [refreshNote, setRefreshNote] = useState<string | null>(null);
+  const [renderingKeys, setRenderingKeys] = useState<Set<string>>(() => new Set());
+  const [renderMessages, setRenderMessages] = useState<Record<string, string>>({});
+  const [renderedJobs, setRenderedJobs] = useState<Record<string, string>>({});
   const episode = lib.selected?.doc ?? null;
   const entry = lib.selected?.entry;
+  const currentKey = entry ? JSON.stringify([entry.subject ?? "", entry.file]) : "";
 
   async function refreshPodcasts() {
-    if (!entry) {
-      setRefreshNote("Select a podcast script first.");
-      return;
-    }
-    setRefreshing(true);
-    setRefreshNote(null);
+    if (!entry || renderingKeys.has(currentKey)) return;
+    const key = currentKey;
+    setRenderingKeys((current) => new Set(current).add(key));
+    setRenderMessages((current) => ({ ...current, [key]: `Rendering audio for ${entry.title}…` }));
     try {
-      const body = await generatePodcast(entry.file);
-      setRefreshNote(`Refresh Podcasts: ${body.status ?? "requested"}`);
+      const body = await generatePodcast(entry.file, { subject: entry.subject ?? "" });
+      let status = body;
+      while (status.status === "starting" || status.status === "running") {
+        await new Promise((resolve) => window.setTimeout(resolve, 1000));
+        status = await getPodcastStatus(body.job_id);
+      }
+      if (status.status === "failed") throw new Error(status.error || "Audio rendering failed");
+      if (status.status !== "completed") throw new Error("Unexpected podcast render status");
+      setRenderedJobs((current) => ({ ...current, [key]: body.job_id }));
       lib.reload();
+      setRenderMessages((current) => ({ ...current, [key]: `Audio ready for ${entry.title}` }));
     } catch (error) {
-      setRefreshNote(`Refresh Podcasts failed: ${(error as Error).message}`);
+      setRenderMessages((current) => ({ ...current, [key]: `Audio rendering failed: ${(error as Error).message}` }));
     } finally {
-      setRefreshing(false);
+      setRenderingKeys((current) => {
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
     }
   }
-  const audioFile = entry?.sidecars.find((name) => /\.(mp3|wav)$/i.test(name));
-  const audioUrl = audioFile ? dataUrl("podcasts", audioFile) : null;
+  const audioFile = entry?.sidecars.find((name) => /\.wav$/i.test(name))
+    ?? entry?.sidecars.find((name) => /\.mp3$/i.test(name));
+  const audioUrl = audioFile
+    ? dataUrl("podcasts", audioFile, entry?.subject)
+      + (renderedJobs[currentKey] ? `&render=${encodeURIComponent(renderedJobs[currentKey])}` : "")
+    : null;
   const names = new Map(episode?.cast.map((member) => [member.speaker_id, member.name]) ?? []);
   const turns =
     episode?.script.reduce(
@@ -105,8 +121,8 @@ export function PodcastView() {
   const toolbar = (
     <>
       <button type="button" onClick={lib.reload}>Reload</button>
-      <button type="button" onClick={refreshPodcasts} disabled={refreshing || !entry}>
-        {refreshing ? "Refreshing…" : "Refresh Podcasts"}
+      <button type="button" onClick={refreshPodcasts} disabled={renderingKeys.has(currentKey) || !entry}>
+        {renderingKeys.has(currentKey) ? "Rendering…" : "Render audio"}
       </button>
       <span className="divider" />
       {audioUrl && audioFile ? (
@@ -115,7 +131,7 @@ export function PodcastView() {
         <button type="button" disabled>Download audio</button>
       )}
       {entry ? (
-        <a className="button" href={dataUrl("podcasts", entry.file)} download={entry.file}>
+        <a className="button" href={dataUrl("podcasts", entry.file, entry.subject)} download={entry.file}>
           Download script
         </a>
       ) : null}
@@ -133,7 +149,7 @@ export function PodcastView() {
       details={details}
       toolbar={toolbar}
       status={
-        refreshNote ??
+        renderMessages[currentKey] ??
         (episode
           ? `${episode.script.length} segments · ${turns} spoken turns · ${audioFile ? "audio ready" : "script only"}`
           : "")

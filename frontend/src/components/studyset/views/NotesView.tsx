@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { FileText } from "lucide-react";
-import { getStudyNote, saveStudyNote } from "../studyPersistenceApi";
+import { Download, FileText, Paperclip, Trash2 } from "lucide-react";
+import {
+  deleteStudyNoteAttachment,
+  getStudyNote,
+  listStudyNoteAttachments,
+  saveStudyNote,
+  studyNoteAttachmentUrl,
+  uploadStudyNoteAttachment,
+} from "../studyPersistenceApi";
+import type { StudyNoteAttachment } from "../types";
 
 type SaveState = "idle" | "loading" | "saving" | "saved" | "error";
 
@@ -13,6 +21,13 @@ export function NotesView({ workspaceId }: NotesViewProps) {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
+  const [attachments, setAttachments] = useState<StudyNoteAttachment[]>([]);
+  const [attachmentLoading, setAttachmentLoading] = useState(false);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [attachmentError, setAttachmentError] = useState("");
+  const fileInput = useRef<HTMLInputElement>(null);
+  const currentWorkspace = useRef(workspaceId);
+  currentWorkspace.current = workspaceId;
   const timer = useRef<number | null>(null);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestText = useRef("");
@@ -58,6 +73,21 @@ export function NotesView({ workspaceId }: NotesViewProps) {
     };
   }, [workspaceId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setAttachments([]);
+    setAttachmentError("");
+    setAttachmentBusy(false);
+    setAttachmentLoading(Boolean(workspaceId));
+    if (workspaceId) {
+      void listStudyNoteAttachments(workspaceId)
+        .then((files) => { if (!cancelled) setAttachments(files); })
+        .catch((reason: Error) => { if (!cancelled) setAttachmentError(reason.message); })
+        .finally(() => { if (!cancelled) setAttachmentLoading(false); });
+    }
+    return () => { cancelled = true; };
+  }, [workspaceId]);
+
   const persist = useCallback((targetWorkspaceId: string, value: string) => {
     setSaveState("saving");
     setError("");
@@ -96,6 +126,44 @@ export function NotesView({ workspaceId }: NotesViewProps) {
     window.clearTimeout(timer.current);
     timer.current = null;
     void persist(workspaceId, latestText.current).catch(() => undefined);
+  };
+
+  const handleUpload = async (files: FileList | null) => {
+    if (!workspaceId || !files?.length) return;
+    const targetWorkspaceId = workspaceId;
+    setAttachmentBusy(true);
+    setAttachmentError("");
+    try {
+      for (const file of Array.from(files)) {
+        if (file.size > 20 * 1024 * 1024) throw new Error(`${file.name} exceeds the 20 MB limit.`);
+        const attachment = await uploadStudyNoteAttachment(targetWorkspaceId, file);
+        if (currentWorkspace.current === targetWorkspaceId) {
+          setAttachments((current) => [attachment, ...current]);
+        }
+      }
+    } catch (reason) {
+      if (currentWorkspace.current === targetWorkspaceId) setAttachmentError((reason as Error).message);
+    } finally {
+      if (fileInput.current) fileInput.current.value = "";
+      if (currentWorkspace.current === targetWorkspaceId) setAttachmentBusy(false);
+    }
+  };
+
+  const handleDelete = async (attachment: StudyNoteAttachment) => {
+    if (!workspaceId || !window.confirm(`Remove ${attachment.filename} from this note?`)) return;
+    const targetWorkspaceId = workspaceId;
+    setAttachmentBusy(true);
+    setAttachmentError("");
+    try {
+      await deleteStudyNoteAttachment(targetWorkspaceId, attachment.id);
+      if (currentWorkspace.current === targetWorkspaceId) {
+        setAttachments((current) => current.filter((file) => file.id !== attachment.id));
+      }
+    } catch (reason) {
+      if (currentWorkspace.current === targetWorkspaceId) setAttachmentError((reason as Error).message);
+    } finally {
+      if (currentWorkspace.current === targetWorkspaceId) setAttachmentBusy(false);
+    }
   };
 
   if (!workspaceId) {
@@ -140,6 +208,70 @@ export function NotesView({ workspaceId }: NotesViewProps) {
           aria-label="Study set notes"
           className="flex-1 min-h-[340px] w-full resize-y rounded-xl border border-gray-700 bg-[#111827] p-4 text-[15px] leading-7 text-gray-100 placeholder:text-gray-600 shadow-inner outline-none transition focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 disabled:opacity-60"
         />
+        <div className="rounded-xl border border-gray-700 bg-[#111827] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-gray-100">
+              <Paperclip className="h-4 w-4 text-emerald-400" />
+              <h3 className="text-sm font-semibold">Attachments ({attachments.length})</h3>
+            </div>
+            <input
+              ref={fileInput}
+              type="file"
+              multiple
+              className="hidden"
+              aria-label="Choose note attachments"
+              onChange={(event) => { void handleUpload(event.target.files); }}
+            />
+            <button
+              type="button"
+              disabled={attachmentBusy || attachmentLoading}
+              onClick={() => fileInput.current?.click()}
+              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {attachmentBusy ? "Working…" : "Attach files"}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-gray-400">Keep resources with this study set. Up to 20 MB per file.</p>
+          {attachmentError && <p role="alert" className="mt-3 text-sm text-rose-400">{attachmentError}</p>}
+          {attachmentLoading && <p className="mt-3 text-sm text-gray-400">Loading attachments…</p>}
+          {!attachmentLoading && attachments.length === 0 && (
+            <p className="mt-3 text-sm text-gray-400">No files attached yet.</p>
+          )}
+          {attachments.length > 0 && (
+            <ul className="mt-3 divide-y divide-gray-700">
+              {attachments.map((attachment) => (
+                <li key={attachment.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                  <div className="min-w-0">
+                    <a
+                      href={studyNoteAttachmentUrl(workspaceId, attachment.id)}
+                      className="block truncate text-emerald-300 hover:underline"
+                      title={`Download ${attachment.filename}`}
+                    >
+                      {attachment.filename}
+                    </a>
+                    <span className="text-xs text-gray-400">{(attachment.size / 1024).toFixed(1)} KB</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <a
+                      href={studyNoteAttachmentUrl(workspaceId, attachment.id)}
+                      aria-label={`Download ${attachment.filename}`}
+                      title={`Download ${attachment.filename}`}
+                      className="rounded p-1.5 text-gray-300 hover:bg-gray-700 hover:text-white"
+                    ><Download className="h-4 w-4" /></a>
+                    <button
+                      type="button"
+                      disabled={attachmentBusy}
+                      onClick={() => { void handleDelete(attachment); }}
+                      aria-label={`Remove ${attachment.filename}`}
+                      title={`Remove ${attachment.filename}`}
+                      className="rounded p-1.5 text-gray-300 hover:bg-gray-700 hover:text-rose-300 disabled:opacity-50"
+                    ><Trash2 className="h-4 w-4" /></button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
       </div>
     </section>
   );

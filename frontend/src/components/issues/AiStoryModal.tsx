@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   X, 
   Sparkles, 
@@ -35,12 +35,22 @@ export const AiStoryModal: React.FC<AiStoryModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [createdIssue, setCreatedIssue] = useState<Issue | null>(null);
 
+  useEffect(() => {
+    if (isOpen && !projects.some(project => project.id === projectId)) {
+      setProjectId(currentProject?.id || projects[0]?.id || '');
+    }
+  }, [isOpen, currentProject?.id, projects, projectId]);
+
   if (!isOpen) return null;
 
   const handleGenerate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!prompt.trim()) {
       setErrorMsg('Please enter a description or prompt for the story.');
+      return;
+    }
+    if (!projectId) {
+      setErrorMsg('Create or select a project before generating a story.');
       return;
     }
 

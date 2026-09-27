@@ -413,6 +413,107 @@ class StudySetApiTests(unittest.TestCase):
         invalid_res = self.client.put(note_url, json={'text': ['not', 'text']})
         self.assertEqual(invalid_res.status_code, 422)
 
+    def test_05bc_study_note_attachments_can_be_uploaded_accessed_and_removed(self):
+        workspace_id = self.created_workspace_id
+        other_workspace_id = self.second_workspace_id
+        url = f'/api/workspace/study-sets/{workspace_id}/note/attachments'
+        body = b'BFS notes and examples\n'
+
+        upload = self.client.post(url, content=body, headers={
+            'Content-Type': 'text/plain', 'X-File-Name': 'BFS%20notes.txt',
+        })
+        self.assertEqual(upload.status_code, 201, upload.text)
+        attachment = upload.json()
+        self.assertEqual(attachment['filename'], 'BFS notes.txt')
+        self.assertEqual(attachment['size'], len(body))
+
+        from backend.study import state
+        state._store = None
+
+        listing = self.client.get(url)
+        self.assertEqual(listing.status_code, 200, listing.text)
+        self.assertEqual(listing.json()['attachments'], [attachment])
+
+        file_url = f"{url}/{attachment['id']}"
+        downloaded = self.client.get(file_url)
+        self.assertEqual(downloaded.status_code, 200, downloaded.text)
+        self.assertEqual(downloaded.content, body)
+        self.assertIn('BFS%20notes.txt', downloaded.headers['content-disposition'])
+        self.assertEqual(downloaded.headers['x-content-type-options'], 'nosniff')
+
+        other_url = f'/api/workspace/study-sets/{other_workspace_id}/note/attachments'
+        self.assertEqual(self.client.get(other_url).json()['attachments'], [])
+        self.assertEqual(self.client.get(f"{other_url}/{attachment['id']}").status_code, 404)
+        self.assertEqual(self.client.delete(f"{other_url}/{attachment['id']}").status_code, 404)
+        self.assertEqual(self.client.post(url, content=b'', headers={'X-File-Name': 'empty.txt'}).status_code, 422)
+        self.assertEqual(self.client.post(url, content=b'x', headers={'X-File-Name': '..%2Fevil.txt'}).status_code, 422)
+
+        removed = self.client.delete(file_url)
+        self.assertEqual(removed.status_code, 204)
+        self.assertEqual(self.client.get(file_url).status_code, 404)
+        self.assertEqual(self.client.get(url).json()['attachments'], [])
+
+    def test_05bd_podcast_rendering_keeps_audio_with_each_subject_and_reports_failures(self):
+        workspace_id = self.created_workspace_id
+        self.assertEqual(self.client.post('/api/workspace/activate', json={'workspace': workspace_id}).status_code, 200)
+        from backend.study.state import get_content_store
+        store = get_content_store()
+
+        def script(title):
+            return json.dumps({
+                'episode_title': title,
+                'cast': [
+                    {'speaker_id': 'host', 'voice_file': 'host.wav'},
+                    {'speaker_id': 'guest', 'voice_file': 'guest.wav'},
+                ],
+                'script': [{'segment_name': 'Intro', 'scenes': [
+                    {'speaker_id': 'host', 'dialogue': f'Welcome to {title}.'},
+                    {'speaker_id': 'guest', 'dialogue': 'Thank you for having me.'},
+                ]}],
+            }).encode()
+
+        with store._connect() as connection:
+            for subject in ('first', 'second', 'broken'):
+                connection.execute(
+                    "INSERT INTO content(workspace_id, kind, subject, filename, body, content_type) "
+                    "VALUES (?, 'podcasts', ?, 'episode.json', ?, 'application/json')",
+                    (workspace_id, subject, script(subject)),
+                )
+
+        for subject in ('first', 'second'):
+            with patch('backend.study.router.render_podcast_script', return_value=f'WAV-{subject}'.encode()):
+                started = self.client.post('/api/generate_podcast', json={
+                    'podcast_file': 'episode.json', 'podcast_subject': subject,
+                })
+            self.assertEqual(started.status_code, 202, started.text)
+            status = self.client.get('/api/generate_podcast', params={'job_id': started.json()['job_id']})
+            self.assertEqual(status.json()['status'], 'completed')
+            audio = self.client.get('/api/content/podcasts/episode.wav', params={'subject': subject})
+            self.assertEqual(audio.content, f'WAV-{subject}'.encode())
+
+        manifest = self.client.get('/api/content/manifest').json()['kinds']['podcasts']
+        self.assertEqual(
+            {item['subject']: item['sidecars'] for item in manifest},
+            {'first': ['episode.wav'], 'second': ['episode.wav'], 'broken': []},
+        )
+        self.assertEqual(self.client.post('/api/generate_podcast', json={'podcast_file': 'episode.json'}).status_code, 422)
+        same_voice = self.client.post('/api/generate_podcast', json={
+            'podcast_file': 'episode.json', 'podcast_subject': 'first',
+            'voiceA': 'af_heart', 'voiceB': 'af_heart',
+        })
+        self.assertEqual(same_voice.status_code, 422)
+        self.assertIn('different voice actors', same_voice.json()['detail'])
+
+        with patch('backend.study.router.render_podcast_script', side_effect=RuntimeError('speech service unavailable')):
+            failed = self.client.post('/api/generate_podcast', json={
+                'podcast_file': 'episode.json', 'podcast_subject': 'broken',
+            })
+        self.assertEqual(failed.status_code, 202)
+        failure = self.client.get('/api/generate_podcast', params={'job_id': failed.json()['job_id']}).json()
+        self.assertEqual(failure['status'], 'failed')
+        self.assertIn('speech service unavailable', failure['error'])
+        self.assertEqual(self.client.get('/api/content/podcasts/episode.wav', params={'subject': 'broken'}).status_code, 404)
+
     def test_05c_flashcard_audio_matches_frontend_contract(self):
         with patch('backend.study.router.synthesize_wav', return_value=b'RIFF-test-wave'):
             response = self.client.post(

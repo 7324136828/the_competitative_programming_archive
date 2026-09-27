@@ -1,12 +1,13 @@
 import json
 import logging
+from datetime import date
 from ..db import db, SQL_NOW
 from ..util import new_id, now_iso
 from .users import get_default_user_id, is_user_eligible_for_assignment
 from .workflows import is_transition_allowed
 from .automation import run_automation_trigger
 from .notifications import notify_watchers
-from .history import record_status_change, record_sprint_event
+from .history import get_status_category, record_status_change, record_sprint_event
 
 logger = logging.getLogger('uvicorn.error')
 
@@ -545,18 +546,56 @@ def update_issue_status(issue_id: str, new_status: str, user_id=None, source: st
 
 
     old_status = issue['status']
+    old_category = get_status_category(issue['project_id'], old_status)
+    new_category = get_status_category(issue['project_id'], new_status)
 
     def _work():
         if old_status != new_status:
             record_status_change(issue_id, issue['project_id'], old_status, new_status,
                                  changed_by=user_id, source=source)
-        db.run(f'UPDATE issues SET status = ?, updated_at = {SQL_NOW} WHERE id = ?', new_status, issue_id)
+        _save_status_and_dates(issue, new_status, old_category, new_category)
 
     db.with_transaction(_work)
     notify_watchers(issue_id, f'Status Changed: {new_status}',
                     f'Issue {issue["key"]} was moved from "{old_status}" to "{new_status}".', user_id)
     run_automation_trigger('STATUS_CHANGED', issue_id, issue['project_id'], user_id)
     return get_issue_by_id(issue_id)
+
+
+def _save_status_and_dates(issue: dict, new_status: str, old_category: str, new_category: str):
+    start_date = issue['start_date']
+    due_date = issue['due_date']
+    if issue['type'] == 'Story' and issue['status'] != new_status:
+        today = date.today().isoformat()
+        if new_category in ('IN_PROGRESS', 'DONE') and not start_date:
+            start_date = today
+        if new_category == 'DONE' and old_category != 'DONE':
+            due_date = today
+        elif old_category == 'DONE' and new_category != 'DONE':
+            due_date = None
+    db.run(
+        f'UPDATE issues SET status = ?, start_date = ?, due_date = ?, updated_at = {SQL_NOW} WHERE id = ?',
+        new_status, start_date, due_date, issue['id'],
+    )
+
+
+def start_story(issue_id: str, user_id=None):
+    issue = db.q1('SELECT * FROM issues WHERE id = ?', issue_id)
+    if not issue or issue['type'] != 'Story':
+        raise ValueError('Story not found')
+    if get_status_category(issue['project_id'], issue['status']) != 'TODO':
+        raise ValueError('Only a To Do story can be started')
+    transition = db.q1(
+        """SELECT wt.to_status FROM workflow_transitions wt
+           JOIN workflows w ON wt.workflow_id = w.id
+           JOIN workflow_statuses ws ON ws.workflow_id = w.id AND ws.name = wt.to_status
+           WHERE w.project_id = ? AND wt.from_status = ? AND ws.category = 'IN_PROGRESS'
+           ORDER BY ws.position LIMIT 1""",
+        issue['project_id'], issue['status'],
+    )
+    if not transition:
+        raise ValueError('No available transition to start this story')
+    return update_issue_status(issue_id, transition['to_status'], user_id)
 
 
 def update_coding_story_submission(issue_id_or_problem_id, verdict: str, test_results=None, user_id=None):
@@ -588,7 +627,8 @@ def update_coding_story_submission(issue_id_or_problem_id, verdict: str, test_re
             except Exception:
                 old_status = issue['status']
                 record_status_change(issue_id, issue['project_id'], old_status, done_status, changed_by=user_id, source='submission')
-                db.run(f'UPDATE issues SET status = ?, updated_at = {SQL_NOW} WHERE id = ?', done_status, issue_id)
+                _save_status_and_dates(issue, done_status,
+                                       get_status_category(issue['project_id'], old_status), 'DONE')
     else:
         if issue['status'] == 'To Do':
             in_prog = 'In Progress'
@@ -606,7 +646,8 @@ def update_coding_story_submission(issue_id_or_problem_id, verdict: str, test_re
             except Exception:
                 old_status = issue['status']
                 record_status_change(issue_id, issue['project_id'], old_status, in_prog, changed_by=user_id, source='submission')
-                db.run(f'UPDATE issues SET status = ?, updated_at = {SQL_NOW} WHERE id = ?', in_prog, issue_id)
+                _save_status_and_dates(issue, in_prog,
+                                       get_status_category(issue['project_id'], old_status), 'IN_PROGRESS')
 
     return get_issue_by_id(issue_id)
 
@@ -721,6 +762,11 @@ def search_issues(filter: dict, *, page: int | None = None, limit: int | None = 
     if filter.get('type'):
         sql += ' AND i.type = ?'
         params.append(filter['type'])
+    elif filter.get('types'):
+        issue_types = [value.strip() for value in filter['types'].split(',') if value.strip()]
+        if issue_types:
+            sql += f" AND i.type IN ({', '.join('?' for _ in issue_types)})"
+            params.extend(issue_types)
     if 'sprintId' in filter:
         if filter['sprintId'] is None:
             sql += ' AND i.sprint_id IS NULL'

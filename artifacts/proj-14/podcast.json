@@ -1,0 +1,39 @@
+{
+  "episode_title": "PROJ-14: Two narrators explain graph traversal",
+  "podcast_show": "Study Platform verification",
+  "cast": [
+    {
+      "speaker_id": "host",
+      "name": "Alex",
+      "voice_file": "af_heart.pt"
+    },
+    {
+      "speaker_id": "guest",
+      "name": "Sam",
+      "voice_file": "am_adam.pt"
+    }
+  ],
+  "script": [
+    {
+      "segment_name": "A conversation about graph traversal",
+      "scenes": [
+        {
+          "speaker_id": "host",
+          "dialogue": "Welcome! I am Alex. Today we are comparing two ways to explore a graph."
+        },
+        {
+          "speaker_id": "guest",
+          "dialogue": "And I am Sam. Breadth first search uses a queue to visit nearby vertices first."
+        },
+        {
+          "speaker_id": "host",
+          "dialogue": "How is depth first search different, Sam?"
+        },
+        {
+          "speaker_id": "guest",
+          "dialogue": "It follows one path as far as possible before returning. A stack or recursion keeps track of that path."
+        }
+      ]
+    }
+  ]
+}

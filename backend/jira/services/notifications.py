@@ -27,3 +27,7 @@ def get_user_notifications(user_id: str):
 
 def mark_notification_read(notif_id: str):
     db.run('UPDATE notifications SET is_read = 1 WHERE id = ?', notif_id)
+
+
+def clear_user_notifications(user_id: str) -> int:
+    return db.run('DELETE FROM notifications WHERE user_id = ?', user_id).rowcount

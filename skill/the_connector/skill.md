@@ -93,7 +93,7 @@ Each record also includes `request.body`, its content type, byte counts, capture
 
 `routing.requested_model` identifies the requested library model alias when supplied. `routing.configuration_id` and `routing.session_id` correlate the library entry or session. `routing.selected` records the successful provider, configured model, selected model, and effort. Structured completions use the upstream-reported model name when available; the text-chat connectors expose the selected configured model. `routing.attempts` records retries, fallback candidates, successes, unsupported routes, elapsed time, and error types. Discovery, configuration management, validation, and session creation do not invoke a model: these records have `routing.performed: false`, no selected model, and no attempts. Routing facts are internal and do not change completion response payloads.
 
-The same record is appended to **`internal_api_audit`** in the existing memory SQLite database (`%TEMP%\the_connector\connector.db` by default, respecting `DB_PATH`). `request_id` correlates the file and database copies. This table is separate from sessions, messages, configuration history, and model memory. It has no UI, public read endpoint, or export feature, and it is never included in prompts or conversation-memory retrieval. Database records persist across restarts and are not deleted when log files rotate or sessions close. No automatic database retention limit is applied.
+The same record is appended to **`internal_api_audit`** in the existing memory SQLite database (`%TEMP%\the_connector\connector.db` by default, respecting `DB_PATH`). `request_id` correlates the file and database copies. This table is separate from sessions, messages, configuration history, and model memory. It has no UI, public read endpoint, or export feature, and it is never included in prompts or conversation-memory retrieval. Database records persist across restarts, but automatic retention keeps at most the five newest records and 10 MiB of serialized audit payload by default. The newest record is always retained, even when that one complete record exceeds the byte target. Large prunes compact the database when doing so will reclaim substantial space.
 
 This is application-level separation, not filesystem access control: the server account and tools with that account's filesystem permissions (including the existing Python execution tool) can read the database. The local application does not isolate records from machine administrators or arbitrary code running as the server.
 
@@ -110,6 +110,8 @@ RESPONSE_LOG_BACKUP_COUNT=5
 RESPONSE_LOG_MAX_BODY_BYTES=0
 REQUEST_LOG_MAX_BODY_BYTES=0
 INTERNAL_AUDIT_ENABLED=true
+INTERNAL_AUDIT_MAX_BYTES=10485760
+INTERNAL_AUDIT_MAX_ENTRIES=5
 ```
 
 With a body limit, oversized requests or responses are stored as text prefixes with `truncated: true` in both destinations; the HTTP payload remains intact. The file and database switches are independent: `RESPONSE_LOGGING_ENABLED=false` disables file output, while `INTERNAL_AUDIT_ENABLED=false` disables database auditing. Failures in one destination do not suppress the other or change the HTTP response. To watch chat completion request/response records in PowerShell after the first request:
@@ -120,13 +122,15 @@ Get-Content -LiteralPath "$env:TEMP\the_connector\logs\post_api_chat_completions
 
 ## Run the full application
 
-For the web UI, run `setup.bat` then `run.bat` on Windows. On Linux/macOS, run `chmod +x setup.sh run.sh`, then `./setup.sh` and `./run.sh`. Python 3.12 is required. Setup installs the main Python environment, frontend dependencies, and the separate Kokoro environment; Kokoro uses the CPU build by default. Select CUDA explicitly with `setup.bat --kokoro-device cuda` or `./setup.sh --kokoro-device cuda`. The full application uses frontend **http://localhost:5173**, the Connector API at **http://127.0.0.1:8301**, and Kokoro at **http://127.0.0.1:8302**. Vite proxies `/api` to port 8301. On Windows the full-stack launcher opens separate Connector and Kokoro consoles; close both when finished.
+For the web UI, run `setup.bat` then `run_default.bat` (or `run.bat`) on Windows. Use `run_lan.bat` to let other devices on the LAN reach the UI at `http://<your-computer-ip>:5130`, the API at `http://<your-computer-ip>:8301`, and Kokoro health at `http://<your-computer-ip>:8302/health`. On Linux/macOS, run `chmod +x setup.sh run.sh`, then `./setup.sh` and `./run.sh`. Python 3.12 is required. Setup installs the main Python environment, frontend dependencies, and the separate Kokoro environment; Kokoro uses the CPU build by default. Select CUDA explicitly with `setup.bat --kokoro-device cuda` or `./setup.sh --kokoro-device cuda`. The local Windows launch uses frontend **http://localhost:5130**, the Connector API at **http://localhost:8301**, and Kokoro at **http://localhost:8302**. Vite proxies `/api` to port 8301. On Windows all three services share one console; press Ctrl+C or close that window to stop the full stack. The LAN launcher binds all three services to `0.0.0.0`; restart it after switching from the local launcher. Allow inbound TCP ports 5130, 8301, and 8302 in the firewall if needed. The API has no inbound authentication, so use the LAN launcher only on a network you trust.
+
+The Windows launchers accept PowerShell port overrides, for example `run_default.bat -UiPort 5131 -BackendPort 8401`. `run_default.bat` forwards its arguments to `run_lan.bat` with local binding selected. The backend proxy and Kokoro URL follow the selected ports. On another device, use the computer's LAN IP address, never `localhost` or `0.0.0.0`. Check `http://<LAN-IP>:8301/api/health` and `http://<LAN-IP>:8302/health` after starting `run_lan.bat`.
 
 ### Kokoro speech skill (required)
 
-Kokoro is a required Connector service. It remains isolated in its own Python 3.12 environment because its PyTorch dependencies differ from the main API. `run.bat` and `run.sh` refuse to start the application when that environment is missing, and then launch Kokoro on port 8302 alongside the Connector.
+Kokoro is a required Connector service. It remains isolated in its own Python 3.12 environment because its PyTorch dependencies differ from the main API. The Windows full-stack launchers run setup if either environment is missing, then launch Kokoro on port 8302 alongside the Connector.
 
-External services must call the Connector on port 8301 rather than calling Kokoro directly. This preserves the model-response parsing rules and keeps the internal synthesis process on loopback.
+For Connector speech requests, call the Connector on port 8301. The LAN launcher also exposes Kokoro on port 8302 for direct clients; the default launcher keeps both services on loopback.
 
 #### Skill contract: `kokoro_speak`
 
@@ -135,20 +139,33 @@ External services must call the Connector on port 8301 rather than calling Kokor
 | Purpose | Convert a plain-text model response, or the `text` field of a JSON model response, into WAV speech |
 | Readiness | `GET /api/speech/health` returns HTTP 200 only for a verified healthy `python-kokoro` process |
 | Invocation | `POST /api/speech` with `Content-Type: application/json` |
-| Input | `{ "content": "<the complete, unmodified model-response string>" }` |
-| Accepted model response | Non-empty plain text, or a JSON object with a non-empty, top-level string field named `text` |
+| Input | `{ "content": "<the complete, unmodified model-response string>", "actor": "am_michael" }`; `actor` is optional |
+| Accepted model response | Non-empty plain text, or a JSON object with a non-empty, top-level string field named `text` and optional `actor` |
+| Voice actors | `GET /api/speech/voices` returns `{ "default": "<configured default>", "voices": [...] }`. Actor precedence: top-level request, model response JSON, `KOKORO_VOICE` setting, then `af_heart`. |
 | Output | `audio/wav` bytes; optional timing headers include `X-Audio-Duration`, `X-Render-Seconds`, and `X-Real-Time-Factor` |
-| Rejection | HTTP 422 for empty content or a valid JSON value without an eligible `text`; 503 when Kokoro is unreachable; 502 for an invalid Kokoro response |
+| Rejection | HTTP 422 for empty content, a valid JSON value without an eligible `text`, or an invalid actor; 503 when Kokoro is unreachable; 502 for an invalid Kokoro response |
 
 Because the skill is required, the overall `GET /api/health` endpoint also returns HTTP 503 with `status: "unavailable"` when Kokoro is not healthy.
 
 Plain-text responses are spoken as-is. When the complete response is JSON, it must look like this before it is placed in the request's `content` string:
 
 ```json
-{"text":"This sentence can be spoken.","metadata":"This field is never spoken."}
+{"text":"This sentence can be spoken.","actor":"am_michael","metadata":"This field is never spoken."}
 ```
 
-Only `This sentence can be spoken.` is synthesized from that JSON object; metadata is never read aloud. JSON arrays, scalar JSON values, and objects without a string `text` field are rejected by the speech endpoint. The web UI shows **Speak** for every non-empty assistant response; clicking it on an unsupported JSON shape displays the validation error without sending content to Kokoro.
+Only `This sentence can be spoken.` is synthesized from that JSON object; `actor` selects the narrator and metadata is never read aloud. JSON arrays, scalar JSON values, and objects without a string `text` field are rejected by the speech endpoint. The web UI shows **Speak** for every non-empty assistant response; clicking it on an unsupported JSON shape displays the validation error without sending content to Kokoro.
+
+In the web UI's sidebar, click **Settings** to expand Voice actor, Past Memory, Show System Sessions, and Agentic Mode. The panel starts collapsed. Past Memory defaults to on (unless the session's configuration disables it), Show System Sessions defaults to off, and Agentic Mode defaults to on. Saved preferences and session settings still apply.
+
+Choose a **Voice actor** in Settings for the Speak buttons. The list comes from `/api/speech/voices`, and the choice is remembered in this browser across sessions and page reloads. Selecting an actor overrides any actor in the model response JSON. Choose **Automatic** to use the response actor or the configured default.
+
+To set the Connector's default narrator for requests without an actor, add this to `.env` and restart the Connector API:
+
+```dotenv
+KOKORO_VOICE=am_michael
+```
+
+If `KOKORO_VOICE` is not set, the default is `af_heart`. The standalone Kokoro service continues to default to `af_heart` for direct requests.
 
 An external Python service can invoke the skill through the Connector:
 
@@ -164,21 +181,27 @@ model_response = "This plain-text response is sent to Kokoro."
 # JSON responses are also accepted; only their top-level text field is spoken:
 # model_response = json.dumps({
 #     "text": "This sentence is sent to Kokoro.",
+#     "actor": "am_michael",
 #     "metadata": "This value is not spoken.",
 # })
 
 health = httpx.get(f"{connector}/api/speech/health", timeout=5)
 health.raise_for_status()
+voices = httpx.get(f"{connector}/api/speech/voices", timeout=5)
+voices.raise_for_status()
+print(voices.json())  # {"default": "af_heart", "voices": ["af_heart", ...]}
 speech = httpx.post(
     f"{connector}/api/speech",
-    json={"content": model_response},
+    json={"content": model_response, "actor": "am_michael"},
     timeout=120,
 )
 speech.raise_for_status()
 Path("response.wav").write_bytes(speech.content)
 ```
 
-The first speech request may download the Kokoro model and English language data. Configure the internal adapter in `.env` with `KOKORO_BASE_URL`, `KOKORO_VOICE`, `KOKORO_LANGUAGE`, `KOKORO_SPEED`, and `KOKORO_TIMEOUT`; restart the Connector after a change. Keep port 8302 private. If an external service runs on another machine, start only the Connector API with an intentional network bind such as `run_backend.bat --host 0.0.0.0`, restrict access with a firewall or reverse proxy, and leave Kokoro bound to `127.0.0.1`. The Connector has no inbound authentication by default.
+Omit the top-level `actor` to use one from the model response JSON, or the default voice when neither is supplied. Direct Kokoro clients can call `GET http://127.0.0.1:8302/v1/audio/voices` and send `{"input":"Hello.","voice":"am_michael"}` to `POST /v1/audio/speech`. The direct endpoint also accepts `actor` as an alias for `voice` (`voice` takes precedence), and defaults to `af_heart` when neither is supplied. The published voice IDs come from the [official Kokoro voice catalog](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/VOICES.md); the selected voice determines the language when no explicit language is supplied.
+
+The first speech request may download the Kokoro model and language data. Configure the internal adapter in `.env` with `KOKORO_BASE_URL`, `KOKORO_VOICE`, `KOKORO_SPEED`, and `KOKORO_TIMEOUT`; restart the Connector after a change. Language follows the selected actor; `KOKORO_LANGUAGE` is no longer used. Non-English voices may require the corresponding optional Misaki language dependencies. The LAN launcher exposes both the Connector and Kokoro without inbound authentication. Restrict access to a trusted network or with a firewall or reverse proxy.
 
 ## Start a conversation
 
@@ -446,7 +469,27 @@ The reply includes the assistant content, selected provider/model, token usage, 
 
 `max_steps` accepts 1-15 and defaults to 5; an optional `tools` list selects the tools described to the agent. The response includes tool steps and a final answer, which is saved in the session. If a structured response has `final_answer: null` without a registered tool action, the Connector re-prompts according to `agent_final_retries` (default 5). If every retry remains incomplete, the last response is displayed as a formatted JSON code block for inspection. This retry value is editable under **Agent settings** in the configuration screen. In the web chat, the reasoning and tool trace is retained in a collapsed panel and expands only when the user selects it. Neither chat nor agent requests accept provider/model overrides.
 
-`GET /api/agent/tools` lists available tool schemas. `POST /api/agent/step` executes `{ "tool": "calculator", "arguments": { "expression": "25 * 4" } }`. `POST /api/agent/register-tool` registers a named tool schema and optional external webhook endpoint.
+`GET /api/agent/tools` lists available tool schemas. There are three built-in native tools: `run_python_script`, `install_python_package`, and `create_coding_skill_from_conversation`. `POST /api/agent/step` can execute Python with `{ "tool": "run_python_script", "arguments": { "code": "print(25 * 4)" } }`. Python scripts and persisted Python skills run in the currently selected managed virtual environment. The default is created lazily at `%TEMP%\the_connector_python` on Windows or `<system-temp>/the_connector_python` on macOS/Linux; set `AGENT_PYTHON_ENV_DIR` to override that location. When execution reports a missing third-party import, the agent can call `install_python_package` with the PyPI distribution and import names, then retry the script. For example: `{ "tool": "install_python_package", "arguments": { "package": "beautifulsoup4", "import_name": "bs4" } }`. Installation is non-interactive, accepts only a single package name plus an optional exact version, and targets the selected environment. Persisted coding skills have a `type` of `python`, `cmd`, or `c++`; CMD receives argument JSON through stdin and `CONNECTOR_SKILL_ARGS`, while C++17 skills are compiled with a discovered local `g++`, `clang++`, or MSVC `cl`. `GET /api/skills/export` downloads `skills.json`, and `POST /api/skills/import` restores it with explicit duplicate handling. `POST /api/agent/register-tool` still registers an external plugin webhook, which is identified separately from native and persisted skills.
+
+The **Select venv** button in the top bar opens the Python execution-environment window. The default environment remains at `%TEMP%\the_connector_python`; named environments created in this window are stored under `%TEMP%\the_connector_python_envs` by default and are selected immediately after creation. The active selection is persisted in SQLite and controls both `run_python_script` and `install_python_package`. Set `AGENT_PYTHON_ENVS_DIR` to override the parent directory for newly created named environments.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/python-environments` | List managed environments and the active selection |
+| `POST /api/python-environments` | Create a named environment; `{ "name": "Data Science", "select": true }` selects it immediately |
+| `POST /api/python-environments/{id}/select` | Select an existing managed environment for agent execution |
+
+Reusable Python skills are persisted in the SQLite `skills` table and loaded into the agent registry on startup. Each record stores its name, description, JSON parameter schema, generated Python source, original pasted conversation, and timestamps. The Python source must define `run(args)`.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/skills` | List persisted skills |
+| `POST /api/skills/from-conversation` | Generate and save a skill with the model/config attached to `session_id` |
+| `POST /api/skills` | Save an already-generated skill definition |
+| `PATCH /api/skills/{id}` | Edit a skill's name, description, parameter schema, Python source, or source conversation |
+| `DELETE /api/skills/{id}` | Delete a persisted skill and unload it from the active registry |
+
+The **Agent Skills** dialog provides the conversation-paste workflow, persisted-skill list, full editing, deletion, and direct execution test bench. Saved edits immediately refresh the callable agent registry and remain available after restart. Python execution uses a separate process with a five-second timeout, but it is not an operating-system security sandbox; only create or run code you trust. Installing a package can execute third-party installation code with the backend user's permissions, so use trusted package names and pin a version when reproducibility matters.
 
 The chat renderer recognizes fenced `video` blocks returned in assistant text. A block contains one JSON object or an array of up to 20 objects. `url` (also `src`, `video_url`, or `play_url`) is required; `thumbnail`/`poster`, `title`, `description`, `uploader`, and `downloaded_date` are optional. HTTP(S) and same-origin relative media URLs are accepted; unsafe schemes remain visible as ordinary code rather than being loaded. For example:
 

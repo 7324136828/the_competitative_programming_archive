@@ -176,6 +176,8 @@ export const api = {
 
   updateStatus: (id: string, status: string) =>
     apiRequest(`/issues/${id}/status`, { method: 'POST', body: JSON.stringify({ status }) }),
+  startStory: (id: string) =>
+    apiRequest(`/issues/${id}/start`, { method: 'POST' }),
 
   getComments: (id: string) => apiRequest(`/issues/${id}/comments`),
   addComment: (id: string, body: string) =>
@@ -300,6 +302,7 @@ export const api = {
   createUser: (data: { name: string; email: string; role: string }) =>
     apiRequest('/users', { method: 'POST', body: JSON.stringify(data) }),
   getNotifications: () => apiRequest('/notifications'),
+  clearNotifications: () => apiRequest('/notifications', { method: 'DELETE' }),
   markNotificationRead: (id: string) => apiRequest(`/notifications/${id}/read`, { method: 'POST' }),
 
   // System administration

@@ -1,5 +1,6 @@
 import hmac
 import json
+import logging
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -20,11 +21,13 @@ from ..services.ai.registration import register_tools_with_connector, get_last_r
 from ..services.ai.service import draft_tickets, recommend_tickets, intake_report
 from ..services.ai.tools import TOOLS, TOOL_BY_NAME, openai_tool_specs, record_ticket_link
 from ..services.ai.text_calls import parse_text_tool_calls
+from ..services.ai.json_util import parse_json_object
 from ..services.ai.normalizer import normalize_ticket
 from ..services.issues import create_issue
 from ..services.ai.prompts import ASSISTANT_SYSTEM
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _err(status: int, msg: str, code=None):
@@ -459,12 +462,31 @@ def generate_story_route(request: Request, body: dict):
         return _err(403, 'Permission denied')
 
     project_id = body.get('projectId') or 'proj_cp'
-    story_type = (body.get('storyType') or body.get('story_type') or 'coding').lower()
-    prompt = (body.get('prompt') or '').strip()
+    if not isinstance(project_id, str):
+        return _err(400, 'Select a valid project before generating a story')
+    if not db.q1('SELECT id FROM projects WHERE id = ?', project_id):
+        return _err(400, 'Select a valid project before generating a story')
+    story_type = body.get('storyType') or body.get('story_type') or 'coding'
+    if not isinstance(story_type, str):
+        return _err(400, 'Story type must be coding, learning, or non-coding')
+    story_type = story_type.lower()
+    if story_type not in ('coding', 'learning', 'non-coding'):
+        return _err(400, 'Story type must be coding, learning, or non-coding')
+    prompt = body.get('prompt')
+    if not isinstance(prompt, str):
+        return _err(400, 'Prompt is required')
+    prompt = prompt.strip()
     if not prompt:
         return _err(400, 'Prompt is required')
     difficulty = body.get('difficulty') or 'Medium'
+    if difficulty not in ('Easy', 'Medium', 'Hard'):
+        return _err(400, 'Difficulty must be Easy, Medium, or Hard')
     parent_id = body.get('parentId') or body.get('featureId')
+    if parent_id and (not isinstance(parent_id, str) or
+                      not db.q1('SELECT id FROM issues WHERE id = ? AND project_id = ?', parent_id, project_id)):
+        return _err(400, 'Selected parent issue was not found in this project')
+    if body.get('model') is not None and not isinstance(body['model'], str):
+        return _err(400, 'Model must be a string')
 
     if story_type == 'coding':
         sys_prompt = (
@@ -484,7 +506,6 @@ def generate_story_route(request: Request, body: dict):
             "'tags' (list of topic strings), 'story_points' (number between 1 and 5)."
         )
     else:
-        story_type = 'non-coding'
         sys_prompt = (
             "You are a principal software architect and engineering leader. "
             "Generate a non-coding technical design or engineering task story in JSON format with keys: "
@@ -494,72 +515,64 @@ def generate_story_route(request: Request, body: dict):
         )
 
     user_msg = f"Task Prompt: {prompt}\nTarget Difficulty: {difficulty}\nStory Type: {story_type}"
-    parsed = None
     try:
-        res = chat_completion([
+        model = resolve_connector_model(body.get('model'))['model']
+        res = chat_completion(model, [
             {'role': 'system', 'content': sys_prompt},
             {'role': 'user', 'content': user_msg},
-        ])
-        content = res.get('content') or ''
-        clean = content.strip()
-        if '```' in clean:
-            parts = clean.split('```')
-            for part in parts[1:]:
-                txt = part.lstrip('json').strip()
-                if txt.startswith('{') and txt.endswith('}'):
-                    clean = txt
-                    break
-        clean = clean[clean.find('{'):clean.rfind('}')+1]
-        parsed = json.loads(clean)
+        ], feature='story_generation', user_id=acting, project_id=project_id)
+    except ConnectorError as err:
+        return _err(502, f'AI generation is unavailable: {err}', code=err.code)
     except Exception:
-        parsed = None
+        logger.exception('AI story request failed')
+        return _err(502, 'AI generation is unavailable. Check the connector and try again.')
 
-    if not parsed or not isinstance(parsed, dict) or not parsed.get('summary'):
-        parsed = {
-            'summary': f"{prompt[:60].capitalize()}",
-            'description': (
-                f"### Problem Overview\n{prompt}\n\n"
-                f"### Requirements\nAnalyze and implement the solution adhering to optimal time and space complexity.\n\n"
-                f"### Constraints\n- Standard input size up to 10^5\n- Time limit: 2.0s\n- Memory limit: 256MB"
-            ) if story_type == 'coding' else (
-                f"### Learning Guide: {prompt}\nComprehensive study notes and conceptual walkthrough for {prompt}.\n\n"
-                f"### Objectives\n- Understand core mechanisms\n- Analyze time/space complexity tradeoffs\n- Review practical applications"
-            ) if story_type == 'learning' else (
-                f"### Architecture Task: {prompt}\nSystem design and requirements specification for {prompt}.\n\n"
-                f"### Deliverables\n1. High-level architecture diagram and component responsibilities\n2. Data model and schema\n3. Scalability, caching, and resiliency analysis"
-            ),
-            'sample_input_output': [{'input': '5\n1 2 3 4 5', 'output': '15'}] if story_type == 'coding' else [],
-            'hints': [
-                f'Consider breaking down {prompt} into subproblems.',
-                'Identify base cases and optimal data structures.',
-                'Analyze the edge cases such as empty input or boundaries.',
-            ],
+    try:
+        parsed = parse_json_object((res.get('message') or {}).get('content'))
+    except (ValueError, TypeError):
+        return _err(502, 'AI returned an invalid story. Please revise the prompt and try again.')
+    if not isinstance(parsed, dict) or not isinstance(parsed.get('summary'), str) or not parsed['summary'].strip() \
+            or not isinstance(parsed.get('description'), str) or not parsed['description'].strip():
+        return _err(502, 'AI returned an incomplete story. Please revise the prompt and try again.')
+
+    title = body.get('title')
+    summary = title.strip() if isinstance(title, str) and title.strip() else parsed['summary'].strip()
+    sample_io = parsed.get('sample_input_output')
+    if not isinstance(sample_io, list):
+        sample_io = []
+    sample_io = [item for item in sample_io if isinstance(item, dict)
+                 and isinstance(item.get('input'), str) and isinstance(item.get('output'), str)]
+    hints = parsed.get('hints')
+    hints = [item for item in hints if isinstance(item, str)] if isinstance(hints, list) else []
+    tags = parsed.get('tags')
+    tags = [item for item in tags if isinstance(item, str)] if isinstance(tags, list) else []
+    try:
+        points = float(parsed.get('story_points'))
+        if not 0 <= points <= 100:
+            raise ValueError('Invalid story points')
+    except (TypeError, ValueError):
+        points = 3 if difficulty == 'Easy' else 5 if difficulty == 'Medium' else 8
+
+    try:
+        created = create_issue({
+            'projectId': project_id,
+            'type': 'Story',
+            'storyType': story_type,
+            'summary': summary,
+            'description': parsed['description'].strip(),
             'difficulty': difficulty,
-            'tags': [prompt.split()[0].capitalize() if prompt else 'Algorithms'],
-            'story_points': 3 if difficulty == 'Easy' else 5 if difficulty == 'Medium' else 8,
-        }
+            'parentId': parent_id or None,
+            'storyPoints': points,
+            'sampleIo': sample_io,
+            'hints': hints,
+            'tags': tags,
+            'submissionStatus': 'Unsolved',
+        }, acting, source='ai')
+    except ValueError as err:
+        return _err(400, f'Could not save generated story: {err}')
+    except Exception:
+        logger.exception('Could not save generated story')
+        return _err(500, 'Could not save the generated story. Please try again.')
 
-    summary = parsed.get('summary') or prompt
-    description = parsed.get('description') or ''
-    sample_io = parsed.get('sample_input_output') or []
-    hints = parsed.get('hints') or []
-    tags = parsed.get('tags') or []
-    pts = parsed.get('story_points') or (3 if difficulty == 'Easy' else 5 if difficulty == 'Medium' else 8)
-
-    created = create_issue({
-        'projectId': project_id,
-        'type': 'Story',
-        'storyType': story_type,
-        'summary': summary,
-        'description': description,
-        'difficulty': difficulty,
-        'parentId': parent_id or None,
-        'storyPoints': pts,
-        'sampleIo': sample_io,
-        'hints': hints,
-        'tags': tags,
-        'submissionStatus': 'Unsolved',
-    }, acting)
-
-    return created
+    return {'issue': created}
 

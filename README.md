@@ -83,6 +83,12 @@ Start The Connector before The Study Platform. The Study Platform uses its confi
 Kokoro runtime, voice, language, speed, and device configuration; this project
 does not install or launch a separate speech service.
 
+Podcast rendering sends each speaker's voice ID as the Connector's `actor`
+setting. The default pair is `af_heart` and `am_adam`; podcast cast entries can
+override these with `actor` (or the legacy `voice` field). Both speakers must
+have spoken dialogue and use distinct actors. A monologue or failed speech
+request produces a clear error instead of a completed silent podcast.
+
 To open The Study Platform from another device on the same LAN, run:
 
 ```powershell

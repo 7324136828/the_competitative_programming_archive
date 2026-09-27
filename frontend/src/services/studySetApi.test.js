@@ -7,7 +7,14 @@ import {
   unlinkStory,
   generatePodcast,
 } from '../components/studyset/lib/api.ts';
-import { getStudyNote, saveStudyNote } from '../components/studyset/studyPersistenceApi.ts';
+import {
+  deleteStudyNoteAttachment,
+  getStudyNote,
+  listStudyNoteAttachments,
+  saveStudyNote,
+  studyNoteAttachmentUrl,
+  uploadStudyNoteAttachment,
+} from '../components/studyset/studyPersistenceApi.ts';
 
 const originalFetch = globalThis.fetch;
 
@@ -117,12 +124,13 @@ test('generatePodcast requests /api/generate_podcast with options', async () => 
     });
   };
 
-  const res = await generatePodcast('ep1.json', { voiceA: 'af_heart', voiceB: 'am_adam' });
+  const res = await generatePodcast('ep1.json', { voiceA: 'af_heart', voiceB: 'am_adam', subject: 'chapter-two' });
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, '/api/generate_podcast');
   assert.equal(calls[0].options.method, 'POST');
   assert.deepEqual(JSON.parse(calls[0].options.body), {
     podcast_file: 'ep1.json',
+    podcast_subject: 'chapter-two',
     voiceA: 'af_heart',
     voiceB: 'am_adam',
   });
@@ -144,4 +152,27 @@ test('study note API reads and persists notes for an explicit workspace', async 
   assert.equal(calls[1].options.method, 'PUT');
   assert.deepEqual(JSON.parse(calls[1].options.body), { text: 'Remember BFS' });
   assert.equal(saved.text, 'Remember BFS');
+});
+
+test('study note attachment API uploads, lists, links, and removes files for a workspace', async () => {
+  const calls = [];
+  const attachment = { id: 'file-1', filename: 'BFS notes.txt', size: 4 };
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    if (options.method === 'DELETE') return new Response(null, { status: 204 });
+    return jsonResponse(options.method === 'POST' ? attachment : { attachments: [attachment] });
+  };
+  const file = { name: 'BFS notes.txt', type: 'text/plain' };
+  const listed = await listStudyNoteAttachments('ws-1');
+  const uploaded = await uploadStudyNoteAttachment('ws-1', file);
+  await deleteStudyNoteAttachment('ws-1', 'file-1');
+
+  assert.deepEqual(listed, [attachment]);
+  assert.deepEqual(uploaded, attachment);
+  assert.equal(calls[0].url, '/api/workspace/study-sets/ws-1/note/attachments');
+  assert.equal(calls[1].options.method, 'POST');
+  assert.equal(calls[1].options.headers['X-File-Name'], 'BFS%20notes.txt');
+  assert.equal(calls[1].options.body, file);
+  assert.equal(studyNoteAttachmentUrl('ws-1', 'file-1'), calls[2].url);
+  assert.equal(calls[2].options.method, 'DELETE');
 });

@@ -23,6 +23,8 @@ import { MetricsView } from './components/metrics/MetricsView';
 import { AiAssistantView } from './components/ai/AiAssistantView';
 import ProblemList from './components/ProblemList';
 import { StudySetApp } from './components/studyset/StudySetApp';
+import { activateWorkspace } from './components/studyset/lib/api';
+import { navigateToLinkedStudySet } from './components/activity/studySetNavigation';
 import { LoadStudySetModal } from './components/studyset/LoadStudySetModal';
 import { fetchProblem } from './services/api';
 import { api } from './api/client';
@@ -50,6 +52,8 @@ const MainApp = () => {
   });
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [studySetTargetTab, setStudySetTargetTab] = useState('home');
+  const [studySetNavigationKey, setStudySetNavigationKey] = useState(0);
 
   const {
     currentProject,
@@ -65,6 +69,7 @@ const MainApp = () => {
     closeLoadStudySet,
     activeStudySetId,
     setActiveStudySetId,
+    openStudySet,
     refreshKey,
     triggerRefresh,
   } = useProject();
@@ -187,7 +192,9 @@ const MainApp = () => {
           )}
           {activeTab === 'studyset' && (
             <StudySetApp
+              key={studySetNavigationKey}
               initialStudySetId={activeStudySetId}
+              initialTab={studySetTargetTab}
               onOpenStory={openIssueDetail}
               projectId={currentProject?.id}
             />
@@ -238,6 +245,26 @@ const MainApp = () => {
             closeActivity();
             openIssueDetail(story.id);
           }}
+          onStartStory={async (issue) => {
+            const story = String(issue.id).startsWith('problem-')
+              ? await handleCreateStoryForProblem(issue.problem_id)
+              : issue;
+            const started = await api.startStory(story.id);
+            openActivity(started);
+            triggerRefresh();
+          }}
+          onOpenStudySet={(studySetId, targetTab) => navigateToLinkedStudySet(
+            studySetId,
+            targetTab,
+            activateWorkspace,
+            (activatedId, tab) => {
+              setStudySetTargetTab(tab);
+              setStudySetNavigationKey(key => key + 1);
+              openStudySet(activatedId);
+              setActiveTab('studyset');
+              closeActivity();
+            },
+          )}
           onStatusUpdated={handleActivityStatusUpdated}
         />
       )}
