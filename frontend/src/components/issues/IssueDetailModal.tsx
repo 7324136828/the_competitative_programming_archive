@@ -75,6 +75,12 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [isSavingTitle, setIsSavingTitle] = useState(false);
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const [descriptionDraft, setDescriptionDraft] = useState('');
+  const [isSavingDescription, setIsSavingDescription] = useState(false);
 
   const fetchIssueData = async () => {
     if (!selectedIssueId) return;
@@ -112,6 +118,8 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
       setErrorMsg(null);
       setSuccessMsg(null);
       setIssueMetrics(null);
+      setIsEditingTitle(false);
+      setIsEditingDescription(false);
       fetchIssueData();
     }
   }, [selectedIssueId]);
@@ -125,6 +133,44 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
   }, [activeTab, selectedIssueId, refreshKey]);
 
   if (!selectedIssueId || !issue) return null;
+
+  const handleSaveTitle = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const summary = titleDraft.trim();
+    if (!summary) {
+      setErrorMsg('Story title cannot be empty.');
+      return;
+    }
+    setIsSavingTitle(true);
+    setErrorMsg(null);
+    try {
+      const updated = await api.updateIssue(issue.id, { summary });
+      setIssue(updated);
+      setIsEditingTitle(false);
+      setSuccessMsg('Title saved.');
+      triggerRefresh();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Could not save the title. Please try again.');
+    } finally {
+      setIsSavingTitle(false);
+    }
+  };
+
+  const handleSaveDescription = async () => {
+    setIsSavingDescription(true);
+    setErrorMsg(null);
+    try {
+      const updated = await api.updateIssue(issue.id, { description: descriptionDraft });
+      setIssue(updated);
+      setIsEditingDescription(false);
+      setSuccessMsg('Description saved.');
+      triggerRefresh();
+    } catch (err: any) {
+      setErrorMsg(err.message || 'Could not save the description. Please try again.');
+    } finally {
+      setIsSavingDescription(false);
+    }
+  };
 
   // J-08: Status transition
   const handleTransition = async (toStatus: string) => {
@@ -447,7 +493,32 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
                   </span>
                 )}
               </div>
-              <h1 className="text-xl font-bold text-[#172B4D] leading-tight">{issue.summary}</h1>
+              {isEditingTitle ? (
+                <form onSubmit={handleSaveTitle} className="space-y-2">
+                  <input
+                    aria-label="Story title"
+                    type="text"
+                    autoFocus
+                    value={titleDraft}
+                    onChange={e => setTitleDraft(e.target.value)}
+                    disabled={isSavingTitle}
+                    className="w-full px-3 py-2 text-lg font-bold text-[#172B4D] bg-white border border-gray-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button type="button" disabled={isSavingTitle} onClick={() => setIsEditingTitle(false)} className="px-3 py-1.5 text-xs text-gray-600 hover:text-gray-800 disabled:opacity-50">Cancel</button>
+                    <button type="submit" disabled={isSavingTitle || !titleDraft.trim()} className="px-3 py-1.5 text-xs font-semibold text-white bg-[#0052CC] rounded hover:bg-blue-700 disabled:opacity-50">{isSavingTitle ? 'Saving…' : 'Save title'}</button>
+                  </div>
+                </form>
+              ) : (
+                <div className="flex items-start justify-between gap-3">
+                  <h1 className="text-xl font-bold text-[#172B4D] leading-tight">{issue.summary}</h1>
+                  {canEdit && <button type="button" onClick={() => {
+                    setTitleDraft(issue.summary);
+                    setIsEditingTitle(true);
+                    setSuccessMsg(null);
+                  }} className="shrink-0 text-xs text-[#0052CC] hover:underline">Edit title</button>}
+                </div>
+              )}
             </div>
 
             {issue.problem_id && issue.archived_problem && (
@@ -531,10 +602,36 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
 
             {/* Description */}
             <div>
-              <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider mb-2">Description</h3>
-              <div className="text-xs text-gray-800 whitespace-pre-wrap bg-gray-50/70 p-3 rounded-lg border border-gray-200 min-h-16">
-                {issue.description || <span className="text-gray-400 italic">No description provided.</span>}
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-bold text-gray-700 uppercase tracking-wider">Description</h3>
+                {canEdit && !isEditingDescription && (
+                  <button type="button" onClick={() => {
+                    setDescriptionDraft(issue.description || '');
+                    setIsEditingDescription(true);
+                    setSuccessMsg(null);
+                  }} className="text-xs text-[#0052CC] hover:underline">Edit</button>
+                )}
               </div>
+              {isEditingDescription ? (
+                <div className="space-y-2">
+                  <textarea
+                    aria-label="Story description"
+                    value={descriptionDraft}
+                    onChange={e => setDescriptionDraft(e.target.value)}
+                    disabled={isSavingDescription}
+                    rows={8}
+                    className="w-full p-3 text-xs text-gray-800 bg-white border border-gray-300 rounded-lg outline-none focus:ring-1 focus:ring-blue-500 resize-y"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button type="button" disabled={isSavingDescription} onClick={() => setIsEditingDescription(false)} className="px-3 py-1.5 text-xs text-gray-600 hover:text-gray-800 disabled:opacity-50">Cancel</button>
+                    <button type="button" disabled={isSavingDescription} onClick={handleSaveDescription} className="px-3 py-1.5 text-xs font-semibold text-white bg-[#0052CC] rounded hover:bg-blue-700 disabled:opacity-50">{isSavingDescription ? 'Saving…' : 'Save description'}</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-xs text-gray-800 whitespace-pre-wrap bg-gray-50/70 p-3 rounded-lg border border-gray-200 min-h-16">
+                  {issue.description || <span className="text-gray-400 italic">No description provided.</span>}
+                </div>
+              )}
             </div>
 
             {/* J-03: Subtasks section */}

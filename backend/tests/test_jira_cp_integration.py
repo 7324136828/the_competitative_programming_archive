@@ -12,6 +12,7 @@ import unittest
 import tempfile
 from datetime import date
 from pathlib import Path
+from unittest.mock import patch
 from backend.app import create_unified_app
 from fastapi.testclient import TestClient
 from backend.jira.db import db
@@ -381,32 +382,88 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         self.assertTrue(all(issue['sprint_id'] is not None for issue in todo_items))
 
     def test_ai_story_generation(self):
-        # 1. AI Coding Story
-        coding_res = self.client.post('/api/ai/generate-story', headers={'x-user-id': 'u_alex'}, json={
-            'projectId': 'proj_cp',
-            'storyType': 'coding',
-            'prompt': 'Write a problem to find the maximum sub-array sum with Kadane algorithm',
-            'difficulty': 'Medium',
-        })
+        with patch('backend.jira.routers.ai.resolve_connector_model', return_value={'model': 'test-model'}), \
+             patch('backend.jira.routers.ai.chat_completion') as completion:
+            completion.return_value = {'message': {'content': json.dumps({
+                'summary': 'Maximum subarray sum', 'description': 'Find the maximum sum.',
+                'sample_input_output': [{'input': '1 2', 'output': '3'}],
+                'hints': ['Use a running sum'], 'tags': ['Arrays'], 'story_points': 5,
+            })}}
+            coding_res = self.client.post('/api/ai/generate-story', headers={'x-user-id': 'u_alex'}, json={
+                'projectId': 'proj_cp', 'storyType': 'coding',
+                'prompt': 'Write a problem to find the maximum sub-array sum with Kadane algorithm',
+                'difficulty': 'Medium', 'title': 'Kadane practice',
+            })
+            self.assertEqual(completion.call_args.args[0], 'test-model')
         self.assertEqual(coding_res.status_code, 201)
-        coding_story = coding_res.json()
+        coding_story = coding_res.json()['issue']
         self.assertEqual(coding_story['type'], 'Story')
         self.assertEqual(coding_story['story_type'], 'coding')
-        self.assertTrue(coding_story['summary'])
-        self.assertTrue(coding_story['description'])
+        self.assertEqual(coding_story['summary'], 'Kadane practice')
+        self.assertEqual(coding_story['description'], 'Find the maximum sum.')
 
-        # 2. AI Non-Coding Story
-        non_coding_res = self.client.post('/api/ai/generate-story', headers={'x-user-id': 'u_alex'}, json={
-            'projectId': 'proj_cp',
-            'storyType': 'non-coding',
-            'prompt': 'Design an API rate limiter using leaky bucket and token bucket algorithms',
-            'difficulty': 'Hard',
-        })
+        with patch('backend.jira.routers.ai.resolve_connector_model', return_value={'model': 'test-model'}), \
+             patch('backend.jira.routers.ai.chat_completion', return_value={
+                 'message': {'content': '```json\n{"summary":"Rate limiter","description":"Design the architecture."}\n```'}
+             }):
+            non_coding_res = self.client.post('/api/ai/generate-story', headers={'x-user-id': 'u_alex'}, json={
+                'projectId': 'proj_cp', 'storyType': 'non-coding',
+                'prompt': 'Design an API rate limiter using leaky bucket and token bucket algorithms',
+                'difficulty': 'Hard',
+            })
         self.assertEqual(non_coding_res.status_code, 201)
-        non_coding_story = non_coding_res.json()
+        non_coding_story = non_coding_res.json()['issue']
         self.assertEqual(non_coding_story['type'], 'Story')
         self.assertEqual(non_coding_story['story_type'], 'non-coding')
         self.assertTrue(non_coding_story['summary'])
+
+    def test_ai_story_generation_failure_is_clear(self):
+        from backend.jira.services.ai.client import ConnectorError
+
+        request = {'projectId': 'proj_cp', 'storyType': 'learning', 'prompt': 'Explain graph traversal'}
+        with patch('backend.jira.routers.ai.resolve_connector_model', return_value={'model': 'test-model'}), \
+             patch('backend.jira.routers.ai.chat_completion', side_effect=ConnectorError(
+                 503, 'connector_unreachable', 'Connector is offline')):
+            failed = self.client.post('/api/ai/generate-story', headers={'x-user-id': 'u_alex'}, json=request)
+        self.assertEqual(failed.status_code, 502)
+        self.assertIn('Connector is offline', failed.json()['error'])
+
+        with patch('backend.jira.routers.ai.resolve_connector_model', return_value={'model': 'test-model'}), \
+             patch('backend.jira.routers.ai.chat_completion', return_value={
+                 'message': {'content': 'not JSON'}
+             }):
+            malformed = self.client.post('/api/ai/generate-story', headers={'x-user-id': 'u_alex'}, json=request)
+        self.assertEqual(malformed.status_code, 502)
+        self.assertIn('invalid story', malformed.json()['error'])
+
+    def test_story_title_and_description_edits_persist(self):
+        headers = {'x-user-id': 'u_alex'}
+        created = self.client.post('/api/issues', headers=headers, json={
+            'projectId': 'proj_cp', 'type': 'Story', 'storyType': 'learning',
+            'summary': 'PROJ-11 description edit', 'description': 'Original description',
+        })
+        self.assertEqual(created.status_code, 201)
+        issue_id = created.json()['id']
+        updated = self.client.patch(f'/api/issues/{issue_id}', headers=headers,
+                                    json={'description': 'Revised description\nSecond line'})
+        self.assertEqual(updated.status_code, 200)
+        self.assertEqual(updated.json()['description'], 'Revised description\nSecond line')
+        reopened = self.client.get(f'/api/issues/{issue_id}')
+        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.json()['description'], 'Revised description\nSecond line')
+
+        renamed = self.client.patch(f'/api/issues/{issue_id}', headers=headers,
+                                    json={'summary': 'Revised story title'})
+        self.assertEqual(renamed.status_code, 200)
+        self.assertEqual(renamed.json()['summary'], 'Revised story title')
+        reopened = self.client.get(f'/api/issues/{issue_id}')
+        self.assertEqual(reopened.json()['summary'], 'Revised story title')
+
+        blank = self.client.patch(f'/api/issues/{issue_id}', headers=headers,
+                                  json={'summary': '   '})
+        self.assertEqual(blank.status_code, 400)
+        self.assertEqual(self.client.get(f'/api/issues/{issue_id}').json()['summary'],
+                         'Revised story title')
 
 
 if __name__ == '__main__':
