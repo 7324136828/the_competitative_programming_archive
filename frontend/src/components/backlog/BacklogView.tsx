@@ -39,13 +39,13 @@ export const BacklogView: React.FC = () => {
         api.getSprints(currentProject.id),
         api.getIssues({
           projectId: currentProject.id,
-          type: 'Story',
+          types: 'Story,Bug',
           sprintAssigned: true,
           compact: true,
         }),
         api.getIssues({
           projectId: currentProject.id,
-          type: 'Story',
+          types: 'Story,Bug',
           sprintId: 'none',
           compact: true,
           page: backlogPage,
@@ -217,11 +217,11 @@ export const BacklogView: React.FC = () => {
         )}
 
         <TypeIcon type={issue.type} />
-        {issue.story_type && <StoryTypeBadge storyType={issue.story_type} />}
+        {issue.type === 'Story' && issue.story_type && <StoryTypeBadge storyType={issue.story_type} />}
         <span className="font-semibold text-gray-500 hover:text-[#0052CC] shrink-0 font-mono text-[11px]">
           {issue.key}
         </span>
-        <button
+        {issue.type === 'Story' && <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
@@ -239,7 +239,7 @@ export const BacklogView: React.FC = () => {
           title={issue.story_type === 'study' ? 'Open Study Set' : 'Open Activity Screen'}
         >
           {issue.story_type === 'study' ? 'Study Set ↗' : 'Activity ↗'}
-        </button>
+        </button>}
         <span className="text-gray-900 font-medium truncate">{issue.summary}</span>
       </div>
 
@@ -297,7 +297,7 @@ export const BacklogView: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-[#172B4D]">Backlog</h1>
-          <p className="text-xs text-gray-500 mt-0.5">All stories are planned here; unsprinted work is paged below.</p>
+          <p className="text-xs text-gray-500 mt-0.5">Stories and bugs are planned here; unsprinted work is paged below.</p>
         </div>
 
         {canEdit && (
@@ -456,7 +456,7 @@ export const BacklogView: React.FC = () => {
               {expandedSprints['backlog'] ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
             </button>
             <span className="font-bold text-xs text-[#172B4D]">Backlog</span>
-            <span className="text-[11px] text-gray-500 font-normal">{backlogTotal} stories</span>
+            <span className="text-[11px] text-gray-500 font-normal">{backlogTotal} issues</span>
           </div>
 
           <span className="text-xs font-semibold text-gray-600">

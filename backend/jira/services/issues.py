@@ -762,6 +762,11 @@ def search_issues(filter: dict, *, page: int | None = None, limit: int | None = 
     if filter.get('type'):
         sql += ' AND i.type = ?'
         params.append(filter['type'])
+    elif filter.get('types'):
+        issue_types = [value.strip() for value in filter['types'].split(',') if value.strip()]
+        if issue_types:
+            sql += f" AND i.type IN ({', '.join('?' for _ in issue_types)})"
+            params.extend(issue_types)
     if 'sprintId' in filter:
         if filter['sprintId'] is None:
             sql += ' AND i.sprint_id IS NULL'
