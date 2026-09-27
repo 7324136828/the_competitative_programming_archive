@@ -462,9 +462,13 @@ class StudySetApiTests(unittest.TestCase):
         def script(title):
             return json.dumps({
                 'episode_title': title,
-                'cast': [{'speaker_id': 'host', 'voice_file': 'host.wav'}],
+                'cast': [
+                    {'speaker_id': 'host', 'voice_file': 'host.wav'},
+                    {'speaker_id': 'guest', 'voice_file': 'guest.wav'},
+                ],
                 'script': [{'segment_name': 'Intro', 'scenes': [
                     {'speaker_id': 'host', 'dialogue': f'Welcome to {title}.'},
+                    {'speaker_id': 'guest', 'dialogue': 'Thank you for having me.'},
                 ]}],
             }).encode()
 
@@ -493,6 +497,12 @@ class StudySetApiTests(unittest.TestCase):
             {'first': ['episode.wav'], 'second': ['episode.wav'], 'broken': []},
         )
         self.assertEqual(self.client.post('/api/generate_podcast', json={'podcast_file': 'episode.json'}).status_code, 422)
+        same_voice = self.client.post('/api/generate_podcast', json={
+            'podcast_file': 'episode.json', 'podcast_subject': 'first',
+            'voiceA': 'af_heart', 'voiceB': 'af_heart',
+        })
+        self.assertEqual(same_voice.status_code, 422)
+        self.assertIn('different voice actors', same_voice.json()['detail'])
 
         with patch('backend.study.router.render_podcast_script', side_effect=RuntimeError('speech service unavailable')):
             failed = self.client.post('/api/generate_podcast', json={

@@ -61,6 +61,7 @@ export function PodcastView() {
   const lib = useLibrary<PodcastEpisode>("podcasts", parsePodcast);
   const [renderingKeys, setRenderingKeys] = useState<Set<string>>(() => new Set());
   const [renderMessages, setRenderMessages] = useState<Record<string, string>>({});
+  const [renderedJobs, setRenderedJobs] = useState<Record<string, string>>({});
   const episode = lib.selected?.doc ?? null;
   const entry = lib.selected?.entry;
   const currentKey = entry ? JSON.stringify([entry.subject ?? "", entry.file]) : "";
@@ -79,6 +80,7 @@ export function PodcastView() {
       }
       if (status.status === "failed") throw new Error(status.error || "Audio rendering failed");
       if (status.status !== "completed") throw new Error("Unexpected podcast render status");
+      setRenderedJobs((current) => ({ ...current, [key]: body.job_id }));
       lib.reload();
       setRenderMessages((current) => ({ ...current, [key]: `Audio ready for ${entry.title}` }));
     } catch (error) {
@@ -93,7 +95,10 @@ export function PodcastView() {
   }
   const audioFile = entry?.sidecars.find((name) => /\.wav$/i.test(name))
     ?? entry?.sidecars.find((name) => /\.mp3$/i.test(name));
-  const audioUrl = audioFile ? dataUrl("podcasts", audioFile, entry?.subject) : null;
+  const audioUrl = audioFile
+    ? dataUrl("podcasts", audioFile, entry?.subject)
+      + (renderedJobs[currentKey] ? `&render=${encodeURIComponent(renderedJobs[currentKey])}` : "")
+    : null;
   const names = new Map(episode?.cast.map((member) => [member.speaker_id, member.name]) ?? []);
   const turns =
     episode?.script.reduce(

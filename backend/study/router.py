@@ -27,7 +27,7 @@ from .state import (
     list_qa_sessions,
 )
 from .tts import synthesize_wav
-from .podcast import render_podcast_script
+from .podcast import render_podcast_script, validate_podcast_script
 from ..jira.db import db
 from ..jira.services.issues import create_issue, get_issue_by_id, update_issue
 
@@ -637,8 +637,10 @@ async def generate_podcast_endpoint(request: Request, background_tasks: Backgrou
         script_data = json.loads(body.decode("utf-8-sig"))
     except (FileNotFoundError, ValueError) as error:
         raise HTTPException(status_code=422, detail=f"Podcast script could not be read: {error}") from error
-    if not isinstance(script_data, dict) or not isinstance(script_data.get("script"), list):
-        raise HTTPException(status_code=422, detail="Podcast script is invalid")
+    try:
+        validate_podcast_script(script_data, voice_a, voice_b)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
     job_id = uuid.uuid4().hex
     with _podcast_jobs_lock:
         _podcast_jobs[job_id] = {"job_id": job_id, "status": "starting"}

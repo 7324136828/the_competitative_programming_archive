@@ -1,0 +1,40 @@
+{
+  "verifiedAt": "2026-09-27T23:20:57.545126+00:00",
+  "connectorSpeechUrl": "http://127.0.0.1:8301/api/speech",
+  "speechService": "python-kokoro",
+  "job": {
+    "job_id": "683ab3dc62d64ba2bbb18ab6c2ed56b7",
+    "status": "completed",
+    "audio_file": "podcast.wav"
+  },
+  "podcast": {
+    "durationSeconds": 21.875,
+    "sampleRate": 24000,
+    "channels": 1,
+    "rms": 2207.56,
+    "pcmSha256": "4fe1e1e22f6be150ff21b9c134883ef9a57c5bee9420149c493959545a4bb565"
+  },
+  "actors": [
+    "af_heart",
+    "am_adam"
+  ],
+  "comparisonSentence": "Two distinct voices keep this conversation clear.",
+  "actorSamples": {
+    "af_heart": {
+      "durationSeconds": 3.575,
+      "sampleRate": 24000,
+      "channels": 1,
+      "rms": 1525.63,
+      "pcmSha256": "e1aaf6fc5d484b18c17f79e65322bdda836053cf5d2121611700c3243036e3b1"
+    },
+    "am_adam": {
+      "durationSeconds": 3.675,
+      "sampleRate": 24000,
+      "channels": 1,
+      "rms": 2572.46,
+      "pcmSha256": "6161bb32b7cc49bc6d7e80e05fdd2a315618701df06c57aaa553d749a00942a2"
+    }
+  },
+  "distinctActorOutput": true,
+  "silentFallbackUsed": false
+}
