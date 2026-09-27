@@ -413,6 +413,46 @@ class StudySetApiTests(unittest.TestCase):
         invalid_res = self.client.put(note_url, json={'text': ['not', 'text']})
         self.assertEqual(invalid_res.status_code, 422)
 
+    def test_05bc_study_note_attachments_can_be_uploaded_accessed_and_removed(self):
+        workspace_id = self.created_workspace_id
+        other_workspace_id = self.second_workspace_id
+        url = f'/api/workspace/study-sets/{workspace_id}/note/attachments'
+        body = b'BFS notes and examples\n'
+
+        upload = self.client.post(url, content=body, headers={
+            'Content-Type': 'text/plain', 'X-File-Name': 'BFS%20notes.txt',
+        })
+        self.assertEqual(upload.status_code, 201, upload.text)
+        attachment = upload.json()
+        self.assertEqual(attachment['filename'], 'BFS notes.txt')
+        self.assertEqual(attachment['size'], len(body))
+
+        from backend.study import state
+        state._store = None
+
+        listing = self.client.get(url)
+        self.assertEqual(listing.status_code, 200, listing.text)
+        self.assertEqual(listing.json()['attachments'], [attachment])
+
+        file_url = f"{url}/{attachment['id']}"
+        downloaded = self.client.get(file_url)
+        self.assertEqual(downloaded.status_code, 200, downloaded.text)
+        self.assertEqual(downloaded.content, body)
+        self.assertIn('BFS%20notes.txt', downloaded.headers['content-disposition'])
+        self.assertEqual(downloaded.headers['x-content-type-options'], 'nosniff')
+
+        other_url = f'/api/workspace/study-sets/{other_workspace_id}/note/attachments'
+        self.assertEqual(self.client.get(other_url).json()['attachments'], [])
+        self.assertEqual(self.client.get(f"{other_url}/{attachment['id']}").status_code, 404)
+        self.assertEqual(self.client.delete(f"{other_url}/{attachment['id']}").status_code, 404)
+        self.assertEqual(self.client.post(url, content=b'', headers={'X-File-Name': 'empty.txt'}).status_code, 422)
+        self.assertEqual(self.client.post(url, content=b'x', headers={'X-File-Name': '..%2Fevil.txt'}).status_code, 422)
+
+        removed = self.client.delete(file_url)
+        self.assertEqual(removed.status_code, 204)
+        self.assertEqual(self.client.get(file_url).status_code, 404)
+        self.assertEqual(self.client.get(url).json()['attachments'], [])
+
     def test_05c_flashcard_audio_matches_frontend_contract(self):
         with patch('backend.study.router.synthesize_wav', return_value=b'RIFF-test-wave'):
             response = self.client.post(

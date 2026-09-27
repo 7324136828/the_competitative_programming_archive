@@ -140,6 +140,17 @@ class ContentStore:
                     note_text TEXT NOT NULL DEFAULT '',
                     updated_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS study_note_attachments (
+                    id TEXT PRIMARY KEY,
+                    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+                    filename TEXT NOT NULL,
+                    content_type TEXT NOT NULL,
+                    size INTEGER NOT NULL,
+                    body BLOB NOT NULL,
+                    uploaded_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS study_note_attachments_workspace
+                    ON study_note_attachments(workspace_id, uploaded_at DESC);
                 """
             )
 
@@ -812,6 +823,67 @@ class ContentStore:
             "text": text,
             "updatedAt": updated_at,
         }
+
+    @staticmethod
+    def _attachment_metadata(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": str(row["id"]),
+            "workspaceId": str(row["workspace_id"]),
+            "filename": str(row["filename"]),
+            "contentType": str(row["content_type"]),
+            "size": int(row["size"]),
+            "uploadedAt": str(row["uploaded_at"]),
+        }
+
+    def list_note_attachments(self, workspace_id: str) -> list[dict[str, Any]]:
+        with self._connect() as connection:
+            if connection.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone() is None:
+                raise KeyError("Study set not found")
+            rows = connection.execute(
+                """SELECT id, workspace_id, filename, content_type, size, uploaded_at
+                   FROM study_note_attachments WHERE workspace_id = ?
+                   ORDER BY uploaded_at DESC, rowid DESC""",
+                (workspace_id,),
+            ).fetchall()
+        return [self._attachment_metadata(row) for row in rows]
+
+    def add_note_attachment(
+        self, workspace_id: str, filename: str, content_type: str, body: bytes,
+    ) -> dict[str, Any]:
+        attachment_id = uuid.uuid4().hex
+        uploaded_at = datetime.now(timezone.utc).isoformat()
+        with self._connect() as connection:
+            if connection.execute("SELECT 1 FROM workspaces WHERE id = ?", (workspace_id,)).fetchone() is None:
+                raise KeyError("Study set not found")
+            connection.execute(
+                """INSERT INTO study_note_attachments
+                   (id, workspace_id, filename, content_type, size, body, uploaded_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (attachment_id, workspace_id, filename, content_type, len(body), body, uploaded_at),
+            )
+        return {
+            "id": attachment_id, "workspaceId": workspace_id, "filename": filename,
+            "contentType": content_type, "size": len(body), "uploadedAt": uploaded_at,
+        }
+
+    def read_note_attachment(self, workspace_id: str, attachment_id: str) -> tuple[dict[str, Any], bytes]:
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM study_note_attachments WHERE workspace_id = ? AND id = ?",
+                (workspace_id, attachment_id),
+            ).fetchone()
+        if row is None:
+            raise KeyError("Attachment not found")
+        return self._attachment_metadata(row), bytes(row["body"])
+
+    def delete_note_attachment(self, workspace_id: str, attachment_id: str) -> None:
+        with self._connect() as connection:
+            result = connection.execute(
+                "DELETE FROM study_note_attachments WHERE workspace_id = ? AND id = ?",
+                (workspace_id, attachment_id),
+            )
+            if result.rowcount == 0:
+                raise KeyError("Attachment not found")
 
     def get_study_progress(self, workspace_id: str) -> dict[str, Any]:
         """Return the persisted aggregate progress for one study set."""

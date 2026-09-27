@@ -39,13 +39,13 @@ export const BacklogView: React.FC = () => {
         api.getSprints(currentProject.id),
         api.getIssues({
           projectId: currentProject.id,
-          types: 'Story,Bug',
+          types: 'Story,Bug,Task',
           sprintAssigned: true,
           compact: true,
         }),
         api.getIssues({
           projectId: currentProject.id,
-          types: 'Story,Bug',
+          types: 'Story,Bug,Task',
           sprintId: 'none',
           compact: true,
           page: backlogPage,
@@ -297,7 +297,7 @@ export const BacklogView: React.FC = () => {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-[#172B4D]">Backlog</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Stories and bugs are planned here; unsprinted work is paged below.</p>
+          <p className="text-xs text-gray-500 mt-0.5">Stories, bugs, and tasks are planned here; unsprinted work is paged below.</p>
         </div>
 
         {canEdit && (

@@ -7,7 +7,7 @@ import base64
 import json
 import logging
 import uuid
-from urllib.parse import unquote
+from urllib.parse import quote, unquote
 from typing import Any
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
@@ -350,6 +350,8 @@ def get_content_file(kind: str, filename: str):
 # Study Notes
 # --------------------------------------------------------------------------
 
+MAX_NOTE_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
 @router.get("/workspace/study-sets/{workspace_id}/note")
 def get_study_note(workspace_id: str):
     try:
@@ -366,6 +368,63 @@ async def save_study_note(workspace_id: str, request: Request):
         raise HTTPException(status_code=422, detail="text must be a string")
     try:
         return get_content_store().save_note(workspace_id, text)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error.args[0])) from error
+
+
+@router.get("/workspace/study-sets/{workspace_id}/note/attachments")
+def list_study_note_attachments(workspace_id: str):
+    try:
+        return {"attachments": get_content_store().list_note_attachments(workspace_id)}
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error.args[0])) from error
+
+
+@router.post("/workspace/study-sets/{workspace_id}/note/attachments", status_code=201)
+async def upload_study_note_attachment(workspace_id: str, request: Request):
+    filename = unquote(request.headers.get("x-file-name", "")).strip()
+    if not filename or len(filename) > 255 or any(char in filename for char in ("/", "\\", "\r", "\n", "\x00")):
+        raise HTTPException(status_code=422, detail="A valid file name is required")
+    if request.headers.get("content-length"):
+        try:
+            if int(request.headers["content-length"]) > MAX_NOTE_ATTACHMENT_BYTES:
+                raise HTTPException(status_code=413, detail="Attachment must be 20 MB or smaller")
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid content length")
+    chunks = bytearray()
+    async for chunk in request.stream():
+        if len(chunks) + len(chunk) > MAX_NOTE_ATTACHMENT_BYTES:
+            raise HTTPException(status_code=413, detail="Attachment must be 20 MB or smaller")
+        chunks.extend(chunk)
+    if not chunks:
+        raise HTTPException(status_code=422, detail="Attachment is empty")
+    content_type = request.headers.get("content-type", "application/octet-stream").split(";", 1)[0]
+    try:
+        return get_content_store().add_note_attachment(workspace_id, filename, content_type, bytes(chunks))
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error.args[0])) from error
+
+
+@router.get("/workspace/study-sets/{workspace_id}/note/attachments/{attachment_id}")
+def download_study_note_attachment(workspace_id: str, attachment_id: str):
+    try:
+        metadata, body = get_content_store().read_note_attachment(workspace_id, attachment_id)
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail=str(error.args[0])) from error
+    return Response(
+        content=body,
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(metadata['filename'], safe='')}",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@router.delete("/workspace/study-sets/{workspace_id}/note/attachments/{attachment_id}", status_code=204)
+def delete_study_note_attachment(workspace_id: str, attachment_id: str):
+    try:
+        get_content_store().delete_note_attachment(workspace_id, attachment_id)
     except KeyError as error:
         raise HTTPException(status_code=404, detail=str(error.args[0])) from error
 

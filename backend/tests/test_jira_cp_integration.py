@@ -381,7 +381,7 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         self.assertTrue(todo_items)
         self.assertTrue(all(issue['sprint_id'] is not None for issue in todo_items))
 
-    def test_backlog_queries_include_bugs_and_preserve_project_and_sprint_filters(self):
+    def test_backlog_queries_include_bugs_and_tasks_and_preserve_project_and_sprint_filters(self):
         headers = {'x-user-id': 'u_alex'}
         sprint_res = self.client.post('/api/sprints/projects/proj_cp', json={
             'name': 'PROJ-13 Bug Sprint',
@@ -401,23 +401,28 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         sprint_bug = make_issue('Bug', 'PROJ-13 sprint bug', sprint=sprint_id)
         backlog_story = make_issue('Story', 'PROJ-13 backlog story')
         other_project_bug = make_issue('Bug', 'PROJ-13 other project bug', project_id='proj_mob')
-        task = make_issue('Task', 'PROJ-13 excluded task')
+        backlog_task = make_issue('Task', 'PROJ-13 backlog task')
+        sprint_task = make_issue('Task', 'PROJ-13 sprint task', sprint=sprint_id)
 
         unsprinted = self.client.get(
-            '/api/issues?projectId=proj_cp&types=Story,Bug&sprintId=none&query=PROJ-13&page=1&limit=2&compact=true'
+            '/api/issues?projectId=proj_cp&types=Story,Bug,Task&sprintId=none&query=PROJ-13&page=1&limit=2&compact=true'
         )
         self.assertEqual(unsprinted.status_code, 200, unsprinted.text)
         page = unsprinted.json()
-        self.assertEqual(page['total'], 2)
-        self.assertEqual({issue['id'] for issue in page['issues']}, {backlog_bug['id'], backlog_story['id']})
-        self.assertNotIn(task['id'], [issue['id'] for issue in page['issues']])
-        self.assertNotIn(other_project_bug['id'], [issue['id'] for issue in page['issues']])
+        self.assertEqual(page['total'], 3)
+        second_page = self.client.get(
+            '/api/issues?projectId=proj_cp&types=Story,Bug,Task&sprintId=none&query=PROJ-13&page=2&limit=2&compact=true'
+        )
+        self.assertEqual(second_page.status_code, 200, second_page.text)
+        issue_ids = {issue['id'] for issue in page['issues'] + second_page.json()['issues']}
+        self.assertEqual(issue_ids, {backlog_bug['id'], backlog_story['id'], backlog_task['id']})
+        self.assertNotIn(other_project_bug['id'], issue_ids)
 
         assigned = self.client.get(
-            '/api/issues?projectId=proj_cp&types=Story,Bug&sprintAssigned=true&query=PROJ-13&compact=true'
+            '/api/issues?projectId=proj_cp&types=Story,Bug,Task&sprintAssigned=true&query=PROJ-13&compact=true'
         )
         self.assertEqual(assigned.status_code, 200, assigned.text)
-        self.assertEqual([issue['id'] for issue in assigned.json()], [sprint_bug['id']])
+        self.assertEqual({issue['id'] for issue in assigned.json()}, {sprint_bug['id'], sprint_task['id']})
 
     def test_ai_story_generation(self):
         with patch('backend.jira.routers.ai.resolve_connector_model', return_value={'model': 'test-model'}), \

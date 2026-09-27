@@ -293,3 +293,12 @@ export interface StudyNote {
   updatedAt: string | null;
 }
 
+export interface StudyNoteAttachment {
+  id: string;
+  workspaceId: string;
+  filename: string;
+  contentType: string;
+  size: number;
+  uploadedAt: string;
+}
+
