@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext.js';
 import { useProject } from '../../context/ProjectContext.js';
-import { api } from '../../api/client.js';
+import { api, getActiveUserId } from '../../api/client.js';
 import { getModelOverride, setModelOverride, onModelChange } from '../../utils/modelPreference.js';
 import { Notification } from '../../types/index.js';
 import { RoleBadge } from '../common/Badge.js';
@@ -35,6 +35,8 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
   const [isPersonaDropdownOpen, setIsPersonaDropdownOpen] = useState(false);
   const [isNotifDropdownOpen, setIsNotifDropdownOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [isClearingNotifications, setIsClearingNotifications] = useState(false);
+  const [notificationError, setNotificationError] = useState<string | null>(null);
 
   // AI model selector
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
@@ -85,14 +87,16 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
   };
 
   const notifRef = useRef<HTMLDivElement>(null);
+  const notifFetchVersion = useRef(0);
   const personaRef = useRef<HTMLDivElement>(null);
   const projectRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<HTMLDivElement>(null);
 
   const fetchNotifs = async () => {
+    const version = notifFetchVersion.current;
     try {
       const data = await api.getNotifications();
-      setNotifications(data);
+      if (version === notifFetchVersion.current) setNotifications(data);
     } catch (e) {}
   };
 
@@ -133,10 +137,13 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
   };
 
   useEffect(() => {
+    notifFetchVersion.current += 1;
+    setNotifications([]);
+    setNotificationError(null);
     fetchNotifs();
     const interval = setInterval(fetchNotifs, 10000);
     return () => clearInterval(interval);
-  }, [currentUser]);
+  }, [currentUser?.id]);
 
   // Click outside listener
   useEffect(() => {
@@ -159,6 +166,25 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
   }, []);
 
   const unreadCount = notifications.filter(n => !n.is_read).length;
+
+  const handleClearNotifications = async () => {
+    const clearingUserId = currentUser?.id;
+    setIsClearingNotifications(true);
+    setNotificationError(null);
+    try {
+      await api.clearNotifications();
+      if (getActiveUserId() === clearingUserId) {
+        notifFetchVersion.current += 1;
+        setNotifications([]);
+      }
+    } catch (error) {
+      if (getActiveUserId() === clearingUserId) {
+        setNotificationError(error instanceof Error ? error.message : 'Could not clear notifications. Please try again.');
+      }
+    } finally {
+      setIsClearingNotifications(false);
+    }
+  };
 
   const handleNotificationClick = async (notif: Notification) => {
     if (!notif.is_read) {
@@ -394,11 +420,25 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenSearch, onOpenSettings }) 
             <div className="absolute right-0 mt-2 w-80 bg-white rounded-lg shadow-2xl border border-gray-200 py-2 z-50 max-h-96 overflow-y-auto animate-in fade-in zoom-in-95 duration-100">
               <div className="px-4 py-2 border-b border-gray-100 flex items-center justify-between">
                 <span className="font-semibold text-xs text-gray-700">Notifications</span>
-                <span className="text-[11px] text-gray-400">{unreadCount} unread</span>
+                <div className="flex items-center gap-3">
+                  <span className="text-[11px] text-gray-400">{unreadCount} unread</span>
+                  {notifications.length > 0 && (
+                    <button
+                      type="button"
+                      aria-label="Clear all notifications"
+                      onClick={handleClearNotifications}
+                      disabled={isClearingNotifications}
+                      className="text-[11px] font-semibold text-[#0052CC] hover:underline disabled:opacity-50"
+                    >
+                      {isClearingNotifications ? 'Clearing…' : 'Clear all notifications'}
+                    </button>
+                  )}
+                </div>
               </div>
+              {notificationError && <div role="alert" className="px-4 py-2 text-xs text-red-700 bg-red-50">{notificationError}</div>}
               {notifications.length === 0 ? (
                 <div className="px-4 py-6 text-center text-xs text-gray-400">
-                  No notifications yet. Watch an issue to receive updates!
+                  No notifications.
                 </div>
               ) : (
                 notifications.map(n => (

@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from ..db import db
 from ..util import new_id, generate_avatar
 from ..services.users import resolve_acting_user_id, can_configure_project
-from ..services.notifications import get_user_notifications, mark_notification_read
+from ..services.notifications import clear_user_notifications, get_user_notifications, mark_notification_read
 
 router = APIRouter()
 
@@ -47,6 +47,12 @@ def create_user(request: Request, body: dict):
 @router.get('/notifications')
 def notifications(request: Request):
     return get_user_notifications(resolve_acting_user_id(request))
+
+
+@router.delete('/notifications')
+def clear_notifications(request: Request):
+    cleared = clear_user_notifications(resolve_acting_user_id(request))
+    return {'success': True, 'cleared': cleared}
 
 
 @router.post('/notifications/{id}/read')

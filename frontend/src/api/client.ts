@@ -302,6 +302,7 @@ export const api = {
   createUser: (data: { name: string; email: string; role: string }) =>
     apiRequest('/users', { method: 'POST', body: JSON.stringify(data) }),
   getNotifications: () => apiRequest('/notifications'),
+  clearNotifications: () => apiRequest('/notifications', { method: 'DELETE' }),
   markNotificationRead: (id: string) => apiRequest(`/notifications/${id}/read`, { method: 'POST' }),
 
   // System administration
