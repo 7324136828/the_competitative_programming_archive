@@ -545,7 +545,7 @@ def dates(id: str, request: Request, body: dict):
     if not can_edit_issue(user_id):
         return JSONResponse({'error': 'Permission denied: Viewer cannot change dates'}, 403)
     try:
-        return svc.update_issue_dates(id, body.get('startDate') or None, body.get('dueDate') or None)
+        return svc.update_issue_dates(id, body)
     except Exception as err:
         return JSONResponse({'error': str(err)}, 400)
 

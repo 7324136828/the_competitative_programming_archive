@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS issues (
   story_points REAL,
   start_date TEXT,
   due_date TEXT,
+  finish_date TEXT,
   original_estimate_minutes INTEGER DEFAULT 0,
   remaining_estimate_minutes INTEGER DEFAULT 0,
   problem_id INTEGER,

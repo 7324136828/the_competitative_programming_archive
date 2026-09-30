@@ -190,8 +190,8 @@ export const api = {
   logWork: (id: string, data: any) =>
     apiRequest(`/issues/${id}/worklogs`, { method: 'POST', body: JSON.stringify(data) }),
 
-  updateDates: (id: string, startDate: string | null, dueDate: string | null) =>
-    apiRequest(`/issues/${id}/dates`, { method: 'POST', body: JSON.stringify({ startDate, dueDate }) }),
+  updateDates: (id: string, dates: { startDate?: string | null; dueDate?: string | null; finishDate?: string | null }) =>
+    apiRequest(`/issues/${id}/dates`, { method: 'POST', body: JSON.stringify(dates) }),
 
   setVersion: (id: string, versionId: string | null) =>
     apiRequest(`/issues/${id}/version`, { method: 'POST', body: JSON.stringify({ versionId }) }),

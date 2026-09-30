@@ -10,7 +10,7 @@
 import json
 import unittest
 import tempfile
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch
 from backend.app import create_unified_app
@@ -54,19 +54,19 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         story = story_res.json()
         story_id = story['id']
         self.assertIsNone(story['start_date'])
-        self.assertIsNone(story['due_date'])
+        self.assertIsNone(story['finish_date'])
 
         started = self.client.post(f'/api/issues/{story_id}/start', headers=headers)
         self.assertEqual(started.status_code, 200)
         self.assertEqual(started.json()['status'], 'In Progress')
         self.assertEqual(started.json()['start_date'], today)
-        self.assertIsNone(started.json()['due_date'])
+        self.assertIsNone(started.json()['finish_date'])
 
         dated = self.client.post(f'/api/issues/{story_id}/dates', headers=headers,
-                                 json={'startDate': today, 'dueDate': today})
+                                 json={'startDate': today, 'finishDate': today})
         self.assertEqual(dated.status_code, 200)
         self.assertEqual(dated.json()['start_date'], today)
-        self.assertEqual(dated.json()['due_date'], today)
+        self.assertEqual(dated.json()['finish_date'], today)
 
         submitted = self.client.post(f'/api/issues/{story_id}/submission', headers=headers,
                                      json={'verdict': 'Accepted'})
@@ -74,13 +74,92 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         finished = self.client.get(f'/api/issues/{story_id}').json()
         self.assertEqual(finished['status'], 'Done')
         self.assertEqual(finished['start_date'], today)
-        self.assertEqual(finished['due_date'], today)
+        self.assertEqual(finished['finish_date'], today)
 
         reopened = self.client.post(f'/api/issues/{story_id}/status', headers=headers,
                                     json={'status': 'To Do'})
         self.assertEqual(reopened.status_code, 200)
         self.assertEqual(reopened.json()['start_date'], today)
-        self.assertIsNone(reopened.json()['due_date'])
+        self.assertIsNone(reopened.json()['finish_date'])
+
+    def test_story_due_date_persists_independently_of_workflow_dates(self):
+        today = date.today().isoformat()
+        deadline = (date.today() + timedelta(days=7)).isoformat()
+        headers = {'x-user-id': 'u_alex'}
+        created = self.client.post('/api/issues', headers=headers, json={
+            'projectId': 'proj_cp', 'type': 'Story', 'storyType': 'study',
+            'summary': 'Story with a deadline', 'dueDate': deadline,
+        })
+        self.assertEqual(created.status_code, 201)
+        story = created.json()
+        story_url = f"/api/issues/{story['id']}"
+        self.assertEqual(story['due_date'], deadline)
+        self.assertIsNone(story['start_date'])
+        self.assertIsNone(story['finish_date'])
+        self.assertEqual(self.client.get(story_url).json()['due_date'], deadline)
+
+        for status in ('In Progress', 'In Review', 'Done'):
+            changed = self.client.post(f'{story_url}/status', headers=headers,
+                                       json={'status': status})
+            self.assertEqual(changed.status_code, 200)
+            self.assertEqual(changed.json()['due_date'], deadline)
+        finished = self.client.get(story_url).json()
+        self.assertEqual(finished['start_date'], today)
+        self.assertEqual(finished['finish_date'], today)
+
+        # Editing only the due day accepts today and keeps the other dates.
+        edited = self.client.post(f'{story_url}/dates', headers=headers,
+                                  json={'dueDate': today})
+        self.assertEqual(edited.status_code, 200)
+        self.assertEqual(edited.json()['due_date'], today)
+        self.assertEqual(edited.json()['start_date'], today)
+        self.assertEqual(edited.json()['finish_date'], today)
+        self.assertEqual(self.client.get(story_url).json()['due_date'], today)
+
+        compact = self.client.get('/api/issues', params={
+            'projectId': 'proj_cp', 'compact': 'true', 'search': story['key'],
+        })
+        self.assertEqual(compact.status_code, 200)
+        listed = next(item for item in compact.json() if item['id'] == story['id'])
+        self.assertEqual(listed['due_date'], today)
+        self.assertEqual(listed['finish_date'], today)
+
+        reopened = self.client.post(f'{story_url}/status', headers=headers,
+                                    json={'status': 'To Do'})
+        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.json()['due_date'], today)
+        self.assertIsNone(reopened.json()['finish_date'])
+        cleared = self.client.post(f'{story_url}/dates', headers=headers,
+                                   json={'dueDate': None})
+        self.assertEqual(cleared.status_code, 200)
+        persisted = self.client.get(story_url).json()
+        self.assertIsNone(persisted['due_date'])
+        self.assertEqual(persisted['start_date'], today)
+
+    def test_invalid_due_date_is_rejected_without_changing_story_dates(self):
+        headers = {'x-user-id': 'u_alex'}
+        today = date.today().isoformat()
+        story = self.client.post('/api/issues', headers=headers, json={
+            'projectId': 'proj_cp', 'type': 'Story', 'storyType': 'study',
+            'summary': 'Validate due dates', 'dueDate': today,
+        }).json()
+        story_url = f"/api/issues/{story['id']}"
+        for invalid in ('2026-02-30', '2026-9-27', '2026-09-27T00:00:00Z', 123):
+            with self.subTest(invalid=invalid):
+                updated = self.client.post(f'{story_url}/dates', headers=headers,
+                                           json={'startDate': today, 'dueDate': invalid})
+                self.assertEqual(updated.status_code, 400)
+                self.assertIn('valid date', updated.json()['error'])
+                saved = self.client.get(story_url).json()
+                self.assertEqual(saved['due_date'], today)
+                self.assertIsNone(saved['start_date'])
+        rejected = self.client.post('/api/issues', headers=headers, json={
+            'projectId': 'proj_cp', 'type': 'Story', 'storyType': 'coding',
+            'summary': 'Invalid deadline should not create a problem', 'dueDate': '2026-02-30',
+        })
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIsNone(db.q1('SELECT id FROM problems WHERE title = ?',
+                               'Invalid deadline should not create a problem'))
 
     def test_study_story_can_start_from_to_do(self):
         headers = {'x-user-id': 'u_alex'}
@@ -95,17 +174,19 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
         reviewing = self.client.post(f"/api/issues/{story['id']}/status", headers=headers,
                                      json={'status': 'In Review'})
         self.assertEqual(reviewing.status_code, 200)
-        self.assertIsNone(reviewing.json()['due_date'])
+        self.assertIsNone(reviewing.json()['finish_date'])
         finished = self.client.post(f"/api/issues/{story['id']}/status", headers=headers,
                                     json={'status': 'Done'})
         self.assertEqual(finished.status_code, 200)
-        self.assertEqual(finished.json()['due_date'], date.today().isoformat())
+        self.assertEqual(finished.json()['finish_date'], date.today().isoformat())
 
     def test_automation_status_change_sets_story_dates(self):
         headers = {'x-user-id': 'u_alex'}
+        deadline = (date.today() + timedelta(days=3)).isoformat()
         story = self.client.post('/api/issues', headers=headers, json={
             'projectId': 'proj_cp', 'type': 'Story', 'storyType': 'study',
             'summary': 'PROJ-10 automation date test',
+            'dueDate': deadline,
         }).json()
         rule_id = 'rule_proj10_story_dates'
         db.run(
@@ -122,7 +203,8 @@ class JiraCompetitiveProgrammingIntegrationTests(unittest.TestCase):
             finished = self.client.get(f"/api/issues/{story['id']}").json()
             self.assertEqual(finished['status'], 'Done')
             self.assertEqual(finished['start_date'], date.today().isoformat())
-            self.assertEqual(finished['due_date'], date.today().isoformat())
+            self.assertEqual(finished['finish_date'], date.today().isoformat())
+            self.assertEqual(finished['due_date'], deadline)
         finally:
             db.run('DELETE FROM automation_rules WHERE id = ?', rule_id)
 

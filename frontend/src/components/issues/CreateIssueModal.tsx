@@ -321,8 +321,9 @@ export const CreateIssueModal: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-gray-700 mb-1">Start Date (J-17)</label>
+              <label htmlFor="create-issue-start-date" className="block font-semibold text-gray-700 mb-1">Start Date</label>
               <input
+                id="create-issue-start-date"
                 type="date"
                 value={startDate}
                 onChange={e => setStartDate(e.target.value)}
@@ -331,8 +332,9 @@ export const CreateIssueModal: React.FC = () => {
             </div>
 
             <div>
-              <label className="block font-semibold text-gray-700 mb-1">Due Date (J-17)</label>
+              <label htmlFor="create-issue-due-date" className="block font-semibold text-gray-700 mb-1">Due Date</label>
               <input
+                id="create-issue-due-date"
                 type="date"
                 value={dueDate}
                 onChange={e => setDueDate(e.target.value)}

@@ -67,6 +67,19 @@ class _DB:
         self._ensure_column('issues', 'tags_json', "tags_json TEXT DEFAULT '[]'")
         self._ensure_column('issues', 'submission_status', "submission_status TEXT DEFAULT 'Unsolved'")
         self._ensure_column('issues', 'study_set_id', 'study_set_id TEXT')
+        if self._ensure_column('issues', 'finish_date', 'finish_date TEXT'):
+            # Older story workflows stored completion in due_date. Preserve
+            # those finish dates while retaining existing deadline values.
+            self._conn.execute(
+                """UPDATE issues SET finish_date = due_date
+                   WHERE type = 'Story' AND due_date IS NOT NULL AND
+                     (status = 'Done' OR EXISTS (
+                        SELECT 1 FROM workflow_statuses ws
+                        JOIN workflows w ON w.id = ws.workflow_id
+                        WHERE w.project_id = issues.project_id
+                          AND ws.name = issues.status AND ws.category = 'DONE'
+                     ))"""
+            )
         self._ensure_unique_problem_links()
         self._ensure_fts_consistency()
 
@@ -74,6 +87,8 @@ class _DB:
         cols = self._conn.execute(f'PRAGMA table_info({table})').fetchall()
         if not any(c['name'] == column for c in cols):
             self._conn.execute(f'ALTER TABLE {table} ADD COLUMN {ddl}')
+            return True
+        return False
 
     def _ensure_unique_problem_links(self):
         duplicates = self._conn.execute(

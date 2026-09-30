@@ -12,6 +12,18 @@ from .history import get_status_category, record_status_change, record_sprint_ev
 logger = logging.getLogger('uvicorn.error')
 
 
+def _issue_date(value, label: str):
+    if value is None or value == '':
+        return None
+    if isinstance(value, str):
+        try:
+            if date.fromisoformat(value).isoformat() == value:
+                return value
+        except ValueError:
+            pass
+    raise ValueError(f'{label} must be a valid date in YYYY-MM-DD format.')
+
+
 def _json_value(value, default):
     if isinstance(value, str):
         try:
@@ -97,6 +109,9 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
     if not input.get('summary') or not str(input['summary']).strip():
         raise ValueError('Validation error: Issue summary is required.')
     creator_id = creator_id or get_default_user_id()
+    start_date = _issue_date(input.get('startDate'), 'Start date')
+    due_date = _issue_date(input.get('dueDate'), 'Due date')
+    finish_date = _issue_date(input.get('finishDate'), 'Finish date')
 
     assignee_id = input.get('assigneeId')
     if assignee_id and not is_user_eligible_for_assignment(assignee_id):
@@ -148,9 +163,9 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
             """INSERT INTO issues (
                  id, key, project_id, type, story_type, summary, description, status, priority,
                  difficulty, assignee_id, reporter_id, parent_id, sprint_id, version_id,
-                 rank, story_points, start_date, due_date, problem_id, sample_io_json,
+                 rank, story_points, start_date, due_date, finish_date, problem_id, sample_io_json,
                  hints_json, tags_json, submission_status, study_set_id, created_at, updated_at
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             issue_id, key, project_id,
             issue_type,
             story_type,
@@ -166,8 +181,9 @@ def create_issue(input: dict, creator_id: str | None = None, source: str = 'user
             input.get('versionId') or None,
             issue_rank,
             input.get('storyPoints'),
-            input.get('startDate') or None,
-            input.get('dueDate') or None,
+            start_date,
+            due_date,
+            finish_date,
             resolved_problem_id,
             sample_io,
             hints,
@@ -564,18 +580,18 @@ def update_issue_status(issue_id: str, new_status: str, user_id=None, source: st
 
 def _save_status_and_dates(issue: dict, new_status: str, old_category: str, new_category: str):
     start_date = issue['start_date']
-    due_date = issue['due_date']
+    finish_date = issue['finish_date']
     if issue['type'] == 'Story' and issue['status'] != new_status:
         today = date.today().isoformat()
         if new_category in ('IN_PROGRESS', 'DONE') and not start_date:
             start_date = today
         if new_category == 'DONE' and old_category != 'DONE':
-            due_date = today
+            finish_date = today
         elif old_category == 'DONE' and new_category != 'DONE':
-            due_date = None
+            finish_date = None
     db.run(
-        f'UPDATE issues SET status = ?, start_date = ?, due_date = ?, updated_at = {SQL_NOW} WHERE id = ?',
-        new_status, start_date, due_date, issue['id'],
+        f'UPDATE issues SET status = ?, start_date = ?, finish_date = ?, updated_at = {SQL_NOW} WHERE id = ?',
+        new_status, start_date, finish_date, issue['id'],
     )
 
 
@@ -721,7 +737,7 @@ def search_issues(filter: dict, *, page: int | None = None, limit: int | None = 
     issue_columns = """i.id, i.key, i.project_id, i.type, i.story_type, i.summary,
                        '' AS description, i.status, i.priority, i.difficulty,
                        i.assignee_id, i.reporter_id, i.parent_id, i.sprint_id,
-                       i.version_id, i.rank, i.story_points, i.start_date, i.due_date,
+                       i.version_id, i.rank, i.story_points, i.start_date, i.due_date, i.finish_date,
                        i.original_estimate_minutes, i.remaining_estimate_minutes,
                        i.problem_id, i.submission_status, i.created_at, i.updated_at""" if compact else 'i.*'
     sql = f"""
@@ -799,9 +815,19 @@ def search_issues(filter: dict, *, page: int | None = None, limit: int | None = 
     return db.q(sql, *params)
 
 
-def update_issue_dates(issue_id: str, start_date, due_date):
-    db.run(f'UPDATE issues SET start_date = ?, due_date = ?, updated_at = {SQL_NOW} WHERE id = ?',
-           start_date, due_date, issue_id)
+def update_issue_dates(issue_id: str, patch: dict):
+    if not db.q1('SELECT id FROM issues WHERE id = ?', issue_id):
+        raise ValueError('Story not found')
+    fields = {'startDate': 'start_date', 'dueDate': 'due_date', 'finishDate': 'finish_date'}
+    changes = {
+        column: _issue_date(patch[key], key)
+        for key, column in fields.items() if key in patch
+    }
+    if not changes:
+        raise ValueError('Provide a start, due, or finish date to update.')
+    assignments = ', '.join(f'{column} = ?' for column in changes)
+    db.run(f'UPDATE issues SET {assignments}, updated_at = {SQL_NOW} WHERE id = ?',
+           *changes.values(), issue_id)
     return get_issue_by_id(issue_id)
 
 

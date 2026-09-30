@@ -1,5 +1,7 @@
+import sqlite3
 import tempfile
 import unittest
+from contextlib import closing
 from pathlib import Path
 
 from backend.database_unification import copy_legacy_workspace, merge_legacy_databases
@@ -60,6 +62,31 @@ class DatabaseUnificationTests(unittest.TestCase):
 
         self.assertEqual(target.count(), 1)
         self.assertEqual(target.get_problem(1)['title'], 'Target')
+
+    def test_legacy_story_finish_dates_are_migrated_once_and_deadlines_preserved(self):
+        legacy_path = self.root / 'legacy-dates.sqlite'
+        db.reopen(str(legacy_path))
+        seed_demo_data()
+        stories = db.q("SELECT id FROM issues WHERE type = 'Story' LIMIT 2")
+        completed_id, pending_id = (story['id'] for story in stories)
+        db.run("UPDATE issues SET status = 'Done', due_date = '2026-09-27' WHERE id = ?", completed_id)
+        db.run("UPDATE issues SET status = 'To Do', due_date = '2026-10-01' WHERE id = ?", pending_id)
+        db.reopen(':memory:')
+        with closing(sqlite3.connect(legacy_path)) as connection:
+            connection.execute('ALTER TABLE issues DROP COLUMN finish_date')
+            connection.commit()
+
+        db.reopen(str(legacy_path))
+        completed = db.q1('SELECT * FROM issues WHERE id = ?', completed_id)
+        self.assertEqual(completed['finish_date'], '2026-09-27')
+        self.assertEqual(completed['due_date'], '2026-09-27')
+        pending = db.q1('SELECT * FROM issues WHERE id = ?', pending_id)
+        self.assertIsNone(pending['finish_date'])
+        self.assertEqual(pending['due_date'], '2026-10-01')
+
+        db.run('UPDATE issues SET finish_date = NULL WHERE id = ?', completed_id)
+        db.reopen(str(legacy_path))
+        self.assertIsNone(db.q1('SELECT finish_date FROM issues WHERE id = ?', completed_id)['finish_date'])
 
     def test_legacy_workspace_copy_preserves_existing_files(self):
         source = self.root / 'old-workspace'

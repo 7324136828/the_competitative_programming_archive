@@ -244,6 +244,11 @@ export const BacklogView: React.FC = () => {
       </div>
 
       <div className="flex items-center space-x-3 shrink-0 ml-4">
+        {issue.type === 'Story' && issue.due_date && (
+          <time dateTime={issue.due_date} className="text-xs text-gray-600" title="Due date">
+            Due {issue.due_date}
+          </time>
+        )}
         {/* Sprint Mover (J-07) */}
         {canEdit && (
           <select

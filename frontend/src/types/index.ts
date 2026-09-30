@@ -88,6 +88,7 @@ export interface Issue {
   story_points?: number | null;
   start_date?: string | null;
   due_date?: string | null;
+  finish_date?: string | null;
   totalTimeSpentMinutes?: number;
   problem_id?: number | null;
   archived_problem?: {

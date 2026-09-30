@@ -81,6 +81,7 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
   const [isEditingDescription, setIsEditingDescription] = useState(false);
   const [descriptionDraft, setDescriptionDraft] = useState('');
   const [isSavingDescription, setIsSavingDescription] = useState(false);
+  const [isSavingDate, setIsSavingDate] = useState(false);
 
   const fetchIssueData = async () => {
     if (!selectedIssueId) return;
@@ -317,20 +318,24 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
     }
   };
 
-  // J-17: Dates
-  const handleDateChange = async (field: 'start' | 'due', val: string) => {
-    const newStart = field === 'start' ? val : (issue.start_date || null);
-    const newDue = field === 'due' ? val : (issue.due_date || null);
+  const handleDateChange = async (field: 'start' | 'due' | 'finish', val: string) => {
+    const dateKey = { start: 'startDate', due: 'dueDate', finish: 'finishDate' }[field];
+    setIsSavingDate(true);
+    setErrorMsg(null);
+    setSuccessMsg(null);
     try {
-      await api.updateDates(issue.id, newStart || null, newDue || null);
-      await fetchIssueData();
+      const updated = await api.updateDates(issue.id, { [dateKey]: val || null });
+      setIssue(updated);
+      setSuccessMsg('Date saved.');
       triggerRefresh();
     } catch (err: any) {
-      setErrorMsg(err.message);
+      setErrorMsg(err.message || 'Could not save the date. Please try again.');
+    } finally {
+      setIsSavingDate(false);
     }
   };
 
-  const setToday = (field: 'start' | 'due') => {
+  const setToday = (field: 'start' | 'due' | 'finish') => {
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
     void handleDateChange(field, today);
@@ -1332,36 +1337,34 @@ export const IssueDetailModal: React.FC<IssueDetailModalProps> = ({ onOpenProble
               </select>
             </div>
 
-            {/* Dates (J-17) */}
+            {/* Dates */}
             <div>
               <label className="block text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">
-                Timeline Dates (J-17)
+                Dates
               </label>
               <div className="space-y-2">
-                <div>
-                  <span className="text-[10px] text-gray-400 block mb-0.5">Start Date</span>
-                  <input
-                    type="date"
-                    disabled={!canEdit}
-                    value={issue.start_date || ''}
-                    onChange={e => handleDateChange('start', e.target.value)}
-                    style={{ colorScheme: 'light' }}
-                    className="w-full px-2.5 py-1 bg-white border border-gray-300 rounded text-xs text-gray-800 outline-none disabled:bg-gray-100"
-                  />
-                  {canEdit && <button type="button" onClick={() => setToday('start')} className="mt-1 text-[10px] text-blue-700 hover:underline">Today</button>}
-                </div>
-                <div>
-                  <span className="text-[10px] text-gray-400 block mb-0.5">Finish Date</span>
-                  <input
-                    type="date"
-                    disabled={!canEdit}
-                    value={issue.due_date || ''}
-                    onChange={e => handleDateChange('due', e.target.value)}
-                    style={{ colorScheme: 'light' }}
-                    className="w-full px-2.5 py-1 bg-white border border-gray-300 rounded text-xs text-gray-800 outline-none disabled:bg-gray-100"
-                  />
-                  {canEdit && <button type="button" onClick={() => setToday('due')} className="mt-1 text-[10px] text-blue-700 hover:underline">Today</button>}
-                </div>
+                {([
+                  { field: 'start', label: 'Start Date', value: issue.start_date },
+                  { field: 'due', label: 'Due Date', value: issue.due_date },
+                  { field: 'finish', label: 'Finish Date', value: issue.finish_date },
+                ] as const).map(({ field, label, value }) => (
+                  <div key={field}>
+                    <label htmlFor={`issue-${field}-date`} className="text-[10px] text-gray-500 block mb-0.5">{label}</label>
+                    <input
+                      id={`issue-${field}-date`}
+                      type="date"
+                      disabled={!canEdit || isSavingDate}
+                      value={value || ''}
+                      onChange={e => handleDateChange(field, e.target.value)}
+                      style={{ colorScheme: 'light' }}
+                      className="w-full px-2.5 py-1 bg-white border border-gray-300 rounded text-xs text-gray-800 outline-none disabled:bg-gray-100"
+                    />
+                    {canEdit && <div className="mt-1 flex gap-3 text-[10px] text-blue-700">
+                      <button type="button" disabled={isSavingDate} onClick={() => setToday(field)} className="hover:underline disabled:opacity-50">Today</button>
+                      {value && <button type="button" disabled={isSavingDate} onClick={() => handleDateChange(field, '')} className="hover:underline disabled:opacity-50">Clear</button>}
+                    </div>}
+                  </div>
+                ))}
               </div>
             </div>
 
