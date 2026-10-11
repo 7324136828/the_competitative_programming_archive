@@ -107,8 +107,12 @@ languages, or screens flushes pending changes. Wait for the saved indicator
 before closing the browser; closing with pending changes prompts you to stay.
 
 Draft source files and narration files live under
-`data/workspace/<database-id>/` by default. Set `WORKSPACE_STORAGE_DIR` to use a
-different directory. Back up this directory together with the SQLite database;
+`<data_dir>/workspace/<database-id>/` by default. The data folder defaults to
+`%TEMP%/the_study_platform` and is saved in
+`%APPDATA%/the_study_platform/settings.json`. Change it in **Settings → Storage →
+Data storage**, then restart. Stop the app and copy existing data to the destination
+before restarting if you want to retain it. `WORKSPACE_STORAGE_DIR` provides a
+separate environment override. Back up the workspace together with the SQLite database;
 draft paths in the database are relative to the storage directory. Keep that
 setting unchanged when moving a database to preserve its file references.
 Clearing the database deletes its draft references, problems, and submissions;

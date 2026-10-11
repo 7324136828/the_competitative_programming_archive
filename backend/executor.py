@@ -15,7 +15,7 @@ import tempfile
 import time
 from typing import Callable
 
-from .runtimes import discover_runtimes, language_id
+from .runtimes import discover_runtimes, external_environment, language_id
 
 DEFAULT_TIMEOUT_MS = 5000
 MAX_TIMEOUT_MS = 30000
@@ -53,6 +53,7 @@ def _kill_process_tree(process: subprocess.Popen) -> None:
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 timeout=5,
                 check=False,
+                env=external_environment(),
             )
         except (OSError, subprocess.TimeoutExpired):
             pass
@@ -101,7 +102,7 @@ def _run_process(
                 stdout=stdout,
                 stderr=stderr,
                 shell=False,
-                env=env,
+                env=external_environment(env),
                 **options,
             )
         except OSError as exc:
@@ -134,7 +135,7 @@ def _prepare_code(language: str, code: str, directory: Path | str) -> tuple[list
     runtime = discover_runtimes().get(language_name)
     if not runtime:
         errors = {
-            "python": "A working Python 3 interpreter is not available on this system.",
+            "python": "Install Python 3 and add it to PATH to run Python submissions.",
             "cpp": r"A working C++ compiler (g++ or clang++) is required in PATH or C:\Strawberry\c\bin.",
             "java": "Java compiler/runtime (javac and java) must be installed and available in PATH or JAVA_HOME.",
         }

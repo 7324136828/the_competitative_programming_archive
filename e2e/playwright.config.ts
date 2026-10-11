@@ -1,5 +1,6 @@
 import { defineConfig, devices } from '@playwright/test';
-import { existsSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -27,6 +28,14 @@ const python = environmentPython && existsSync(environmentPython)
 const backendUrl = 'http://127.0.0.1:8001';
 const frontendUrl = 'http://127.0.0.1:5174';
 const testDatabase = join(e2eRoot, 'test-results', 'codejudge.sqlite');
+// Each server run gets its own settings and default data root. Failed or
+// interrupted tests cannot alter real user settings or affect the next run.
+const settingsFixtures = join(e2eRoot, 'test-results', 'settings-fixtures', randomUUID());
+const testAppData = join(settingsFixtures, 'appdata');
+const testTemp = join(settingsFixtures, 'temp');
+mkdirSync(testAppData, { recursive: true });
+mkdirSync(testTemp, { recursive: true });
+const proxyToken = randomUUID();
 const environment = Object.fromEntries(
   Object.entries(process.env).filter(
     (entry): entry is [string, string] => entry[1] !== undefined,
@@ -66,6 +75,10 @@ export default defineConfig({
       cwd: projectRoot,
       env: {
         ...environment,
+        APPDATA: testAppData,
+        TEMP: testTemp,
+        TMP: testTemp,
+        STUDY_PROXY_TOKEN: proxyToken,
         DATABASE_PATH: testDatabase,
         WORKSPACE_STORAGE_DIR: join(e2eRoot, 'test-results', 'files'),
         AUTO_SEED: '0',
@@ -81,6 +94,7 @@ export default defineConfig({
       env: {
         ...environment,
         VITE_BACKEND_URL: backendUrl,
+        STUDY_PROXY_TOKEN: proxyToken,
       },
       url: frontendUrl,
       reuseExistingServer: false,

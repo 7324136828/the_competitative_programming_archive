@@ -46,14 +46,19 @@ def _manifest_workspace_root(path_value: Any) -> str:
 
 
 def get_content_store() -> ContentStore:
-    global _store
-    if _store is None:
+    global _store, _active_workspace_id
+    from ..jira.db import db
+    from ..paths import default_database_path
+    db_path = (
+        Path(db.path) if db.path and db.path != ":memory:"
+        else default_database_path().with_name("study_sets.sqlite")
+    ).resolve()
+    if _store is None or _store.database != db_path:
         with _store_lock:
-            if _store is None:
-                from ..jira.db import db
-                db_path = Path(db.path) if db.path and db.path != ":memory:" else Path(tempfile.gettempdir()) / "study_sets.sqlite"
+            if _store is None or _store.database != db_path:
                 voice_dir = db_path.parent / "voices"
                 _store = ContentStore(db_path, voice_dir)
+                _active_workspace_id = None
     return _store
 
 

@@ -13,6 +13,7 @@ import {
   Clock,
   ArrowRight,
   Database,
+  HardDrive,
   Loader2
 } from 'lucide-react';
 import { useProject } from '../../context/ProjectContext.js';
@@ -26,12 +27,13 @@ import {
   CustomFieldValue 
 } from '../../types/index.js';
 import { RoleBadge } from '../common/Badge.js';
+import SettingsView from '../SettingsView.jsx';
 
 export const ProjectSettingsView: React.FC = () => {
   const { currentProject, triggerRefresh, refreshKey, reloadProjects } = useProject();
   const { users, isAdmin, refreshUsers } = useAuth();
 
-  const [activeTab, setActiveTab] = useState<'workflows' | 'automation' | 'customFields' | 'permissions' | 'database'>('automation');
+  const [activeTab, setActiveTab] = useState<'workflows' | 'automation' | 'customFields' | 'permissions' | 'database' | 'storage'>('automation');
   const [purgeConfirmation, setPurgeConfirmation] = useState('');
   const [isPurging, setIsPurging] = useState(false);
   const [purgeError, setPurgeError] = useState<string | null>(null);
@@ -207,7 +209,7 @@ export const ProjectSettingsView: React.FC = () => {
       </div>
 
       {/* Tabs */}
-      <div className="flex items-center space-x-2 border-b border-gray-200">
+      <div className="flex flex-wrap items-center gap-x-2 border-b border-gray-200">
         <button
           onClick={() => setActiveTab('automation')}
           className={`pb-2.5 px-3 text-xs font-semibold flex items-center space-x-2 border-b-2 transition ${
@@ -267,7 +269,20 @@ export const ProjectSettingsView: React.FC = () => {
           <Database className="w-4 h-4" />
           <span>Database</span>
         </button>
+        <button
+          onClick={() => setActiveTab('storage')}
+          className={`pb-2.5 px-3 text-xs font-semibold flex items-center space-x-2 border-b-2 transition ${
+            activeTab === 'storage'
+              ? 'border-[#0052CC] text-[#0052CC]'
+              : 'border-transparent text-gray-500 hover:text-gray-700'
+          }`}
+        >
+          <HardDrive className="w-4 h-4" />
+          <span>Storage</span>
+        </button>
       </div>
+
+      {activeTab === 'storage' && <SettingsView embedded />}
 
       {/* TAB 1: AUTOMATION (J-22) */}
       {activeTab === 'automation' && (

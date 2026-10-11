@@ -6,6 +6,20 @@ async function readResponse(res, fallback) {
   return data;
 }
 
+export async function fetchSettings({ signal } = {}) {
+  const res = await fetch(`${API_BASE}/settings`, { signal });
+  return readResponse(res, 'Unable to load storage settings. Please retry.');
+}
+
+export async function updateSettings(dataDir) {
+  const res = await fetch(`${API_BASE}/settings`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data_dir: dataDir.trim() }),
+  });
+  return readResponse(res, 'Unable to save storage settings. Please retry.');
+}
+
 export async function fetchModels({ signal } = {}) {
   const res = await fetch(`${API_BASE}/llm/models`, { signal });
   const data = await readResponse(res, 'Unable to discover AI models. Please retry.');

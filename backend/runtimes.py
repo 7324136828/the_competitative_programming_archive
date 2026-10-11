@@ -25,12 +25,26 @@ class Runtime:
 
     def environment(self) -> dict[str, str]:
         """Keep compiler helpers and runtime DLLs discoverable in child processes."""
-        environment = os.environ.copy()
+        environment = external_environment()
         directories = dict.fromkeys(
             str(Path(path).parent) for path in (self.executable, self.compiler) if path
         )
         environment["PATH"] = os.pathsep.join((*directories, environment.get("PATH", "")))
         return environment
+
+
+def external_environment(environment: dict[str, str] | None = None) -> dict[str, str]:
+    """Remove bundle-only PATH entries from external toolchain processes."""
+    result = dict(environment if environment is not None else os.environ)
+    bundle_value = getattr(sys, "_MEIPASS", None) if getattr(sys, "frozen", False) else None
+    if bundle_value:
+        bundle = Path(bundle_value).resolve()
+        entries = result.get("PATH", "").split(os.pathsep)
+        result["PATH"] = os.pathsep.join(
+            entry for entry in entries
+            if not Path(entry.strip('"') or ".").resolve().is_relative_to(bundle)
+        )
+    return result
 
 
 def language_id(language: str) -> str:
@@ -48,7 +62,7 @@ def _usable(path: str | Path | None, arguments: list[str], environment: dict[str
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            env=environment,
+            env=external_environment(environment) if getattr(sys, "frozen", False) else environment,
             timeout=3,
             check=False,
             **options,
@@ -61,7 +75,13 @@ def _usable(path: str | Path | None, arguments: list[str], environment: dict[str
 def discover_runtimes() -> dict[str, Runtime]:
     """Probe current installations so failed executables and incomplete JDKs are omitted."""
     discovered: dict[str, Runtime] = {}
-    for executable in dict.fromkeys((sys.executable, shutil.which("python3"), shutil.which("python"))):
+    # A PyInstaller executable hosts this application; it cannot run arbitrary
+    # Python scripts. Probing it with -c would start another server process.
+    current_python = None if getattr(sys, "frozen", False) else sys.executable
+    frozen_executable = Path(sys.executable).resolve() if getattr(sys, "frozen", False) else None
+    for executable in dict.fromkeys((current_python, shutil.which("python3"), shutil.which("python"))):
+        if executable and frozen_executable == Path(executable).resolve():
+            continue
         if executable and _usable(executable, ["-c", "import sys; sys.exit(sys.version_info.major != 3)"]):
             discovered["python"] = Runtime(str(Path(executable).absolute()))
             break

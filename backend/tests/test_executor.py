@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from backend import executor, runtimes
 
@@ -97,6 +97,28 @@ class ExecutorTests(unittest.TestCase):
             result = executor.run_code("java", "public class Main {}")
         self.assertEqual(result["status"], "Compilation Error")
         self.assertIn("javac and java", result["error"])
+
+    def test_missing_python_has_actionable_error(self):
+        with patch.object(executor, "discover_runtimes", return_value={}):
+            result = executor.run_code("python", "print('hello')")
+        self.assertEqual(result["status"], "Compilation Error")
+        self.assertIn("Install Python 3", result["error"])
+        self.assertIn("PATH", result["error"])
+
+    def test_frozen_child_process_receives_sanitized_toolchain_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle"
+            outside = root / "tools"
+            environment = {"PATH": os.pathsep.join((str(bundle), str(outside)))}
+            child = MagicMock(returncode=0)
+            with patch.object(runtimes.sys, "frozen", True, create=True), patch.object(
+                runtimes.sys, "_MEIPASS", str(bundle), create=True
+            ), patch.object(executor.subprocess, "Popen", return_value=child) as launch:
+                result = executor._run_process(["external-tool"], root, env=environment)
+            self.assertEqual(result["exitCode"], 0)
+            self.assertEqual(launch.call_args.kwargs["env"]["PATH"], str(outside))
+            self.assertIn(str(bundle), environment["PATH"])
 
     def test_missing_cpp_has_actionable_error(self):
         with patch.object(executor, "discover_runtimes", return_value={}):

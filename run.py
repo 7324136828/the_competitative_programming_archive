@@ -4,16 +4,19 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import ipaddress
 import os
 import shutil
 import signal
+import secrets
 import socket
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+from backend.settings import initialize_port_settings
 from launcher_config import load_env_file
 
 ROOT = Path(__file__).resolve().parent
@@ -60,15 +63,22 @@ def parse_port(value: str | int, label: str) -> int:
 
 def available_port(start: int, reserved: set[int] | None = None, *, host: str = "127.0.0.1") -> int:
     reserved = reserved or set()
+    try:
+        family, _, _, _, address = socket.getaddrinfo(host, 0, type=socket.SOCK_STREAM)[0]
+    except OSError as error:
+        raise RunError(f"Cannot resolve bind address {host!r}: {error}") from error
     for port in range(start, 65536):
         if port in reserved:
             continue
-        family = socket.AF_INET6 if ":" in host else socket.AF_INET
         with socket.socket(family, socket.SOCK_STREAM) as probe:
             try:
-                probe.bind((host, port))
-            except OSError:
-                continue
+                if os.name == "nt":
+                    probe.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                probe.bind((address[0], port))
+            except OSError as error:
+                if error.errno in (errno.EADDRINUSE, errno.EACCES):
+                    continue
+                raise RunError(f"Cannot bind to {host}:{port}: {error}") from error
         return port
     raise RunError(f"No available TCP port was found at or above {start}")
 
@@ -146,48 +156,64 @@ def process_options() -> dict:
     return {"start_new_session": True}
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__,
         epilog="Example: run.py serve --lan --frontend-port 8080 --backend-port 8000. "
                "Busy frontend/backend ports advance to the next free port.",
     )
     parser.add_argument("command", nargs="?", choices=("serve",), default="serve", help="start the application (default)")
-    parser.add_argument("--lan", action="store_true", help="share the app on your LAN through the frontend port")
-    parser.add_argument("--backend-port", type=int, metavar="PORT", help="first backend port to try (1-65535; overrides PORT/BACKEND_PORT; default 3001)")
-    parser.add_argument("--frontend-port", type=int, metavar="PORT", help="first frontend port to try (1-65535; overrides FRONTEND_PORT; default 5173)")
-    parser.add_argument("--host", default=os.environ.get("HOST") or os.environ.get("BACKEND_HOST", "127.0.0.1"), help="backend bind address")
-    return parser.parse_args()
+    parser.add_argument("--lan", action="store_true", help="bind both services to 0.0.0.0 (overrides an existing loopback .env default)")
+    parser.add_argument("--backend-port", "--backend", type=int, metavar="PORT", help="first backend port to try (1-65535; overrides settings.json; missing default from port_mapping.json)")
+    parser.add_argument("--frontend-port", "--frontend", type=int, metavar="PORT", help="first frontend port to try (1-65535; overrides settings.json; missing default from port_mapping.json)")
+    parser.add_argument("--host", help="bind address for both services (default: HOST/BACKEND_HOST or 0.0.0.0; use 127.0.0.1 for local access)")
+    return parser.parse_args(argv)
 
 
 def main() -> int:
     load_env_file()
     args = parse_args()
-    requested_backend = parse_port(
-        args.backend_port if args.backend_port is not None else os.environ.get("PORT") or os.environ.get("BACKEND_PORT", "3001"),
-        "backend port",
-    )
-    requested_frontend = parse_port(
-        args.frontend_port if args.frontend_port is not None else os.environ.get("FRONTEND_PORT", "5173"),
-        "frontend port",
-    )
+    # Reject explicit mistakes before bootstrapping a development environment.
+    for value, label in ((args.backend_port, "backend port"), (args.frontend_port, "frontend port")):
+        if value is not None:
+            parse_port(value, label)
     runtime = select_runtime()
     if Path(sys.executable).resolve() != runtime.resolve():
         return subprocess.call([str(runtime), str(Path(__file__).resolve()), *sys.argv[1:]])
 
-    host = args.host
+    try:
+        settings = initialize_port_settings()
+    except (OSError, ValueError) as error:
+        raise RunError(f"Cannot initialize settings: {error}") from error
+    requested_backend = parse_port(
+        args.backend_port if args.backend_port is not None else settings["backend_port"],
+        "backend port",
+    )
+    requested_frontend = parse_port(
+        args.frontend_port if args.frontend_port is not None else settings["frontend_port"],
+        "frontend port",
+    )
+
+    host = args.host or ("0.0.0.0" if args.lan else os.environ.get("HOST") or os.environ.get("BACKEND_HOST") or "0.0.0.0")
     backend_port = available_port(requested_backend, set(), host=host)
-    frontend_bind = "0.0.0.0" if args.lan else "127.0.0.1"
+    frontend_bind = host
     frontend_port = available_port(requested_frontend, {backend_port}, host=frontend_bind)
     backend_url = backend_connect_url(host, backend_port)
-    frontend_url = f"http://localhost:{frontend_port}"
+    frontend_url = f"http://localhost:{frontend_port}" if host == "0.0.0.0" else backend_connect_url(host, frontend_port)
+    from backend.network import lan_urls_for_host
+    frontend_lan_urls = lan_urls_for_host(host, frontend_port)
+    backend_lan_urls = lan_urls_for_host(host, backend_port)
 
     backend_env = os.environ.copy()
     backend_env["PORT"] = str(backend_port)
     backend_env["HOST"] = host
+    proxy_token = secrets.token_urlsafe(32)
+    backend_env["STUDY_PROXY_TOKEN"] = proxy_token
 
     frontend_env = os.environ.copy()
     frontend_env["VITE_BACKEND_URL"] = backend_url
+    # This secret is used only by Vite's server-side proxy configuration.
+    frontend_env["STUDY_PROXY_TOKEN"] = proxy_token
 
     npm = shutil.which("npm.cmd" if os.name == "nt" else "npm")
     if npm is None:
@@ -204,12 +230,12 @@ def main() -> int:
     print(f"Python:   {sys.executable}")
     print(f"Backend:  {backend_url} (API: {backend_url}/api/problems)")
     print(f"Frontend: {frontend_url}")
-    if args.lan:
-        addresses = lan_addresses()
-        for address in addresses:
-            print(f"LAN:      http://{address}:{frontend_port}")
-        if not addresses:
-            print(f"LAN:      http://<this-computer-LAN-IP>:{frontend_port}")
+    for frontend_lan_url, backend_lan_url in zip(frontend_lan_urls, backend_lan_urls):
+        print(f"LAN:      {frontend_lan_url}")
+        print(f"LAN API:  {backend_lan_url}/docs")
+    if host == "0.0.0.0" and not frontend_lan_urls:
+        print(f"LAN:      http://<this-computer-LAN-IP>:{frontend_port}")
+    if frontend_lan_urls or host == "0.0.0.0":
         if os.name == "nt":
             print("LAN note: allow Python and Node.js on Private networks if Windows Firewall prompts.")
     print(f"Connector: {os.environ.get('CONNECTOR_BASE_URL', 'http://127.0.0.1:8301/v1')} (LLM and speech)")

@@ -36,7 +36,7 @@ load_env_file()
 
 
 def resolve_db_path() -> str:
-    configured = os.environ.get('DATABASE_PATH') or os.environ.get('DB_PATH')
+    configured = os.environ.get('DATABASE_PATH') or os.environ.get('DB_PATH') or os.environ.get('JIRA_DB_PATH')
     if configured:
         p = Path(configured)
         return str(p if p.is_absolute() else (SERVER_DIR.parent / p).resolve())
@@ -52,9 +52,7 @@ def resolve_upload_dir() -> str:
     if os.environ.get('UPLOAD_DIR'):
         p = Path(os.environ['UPLOAD_DIR'])
         return str(p if p.is_absolute() else (SERVER_DIR / p).resolve())
-    if os.environ.get('DATABASE_PATH') or os.environ.get('DB_PATH'):
-        return os.path.join(os.path.dirname(resolve_db_path()), 'uploads')
-    return str((SERVER_DIR / 'uploads').resolve())
+    return os.path.join(os.path.dirname(resolve_db_path()), 'uploads')
 
 
 # ---------- Connector / AI settings (read live so tests can toggle env) ----------

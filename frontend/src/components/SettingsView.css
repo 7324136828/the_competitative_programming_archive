@@ -3,6 +3,7 @@
 .settings-content h1 { margin: 0; font-size: 1.6rem; }
 .settings-intro { margin: 0.6rem 0 1.5rem; color: #aeb5c1; font-size: 0.9rem; line-height: 1.6; }
 .settings-card { padding: clamp(1rem, 3vw, 1.5rem); background: #202020; border: 1px solid #363b43; border-radius: 0.65rem; }
+.settings-card + .settings-card { margin-top: 1.25rem; }
 .settings-card h2 { display: flex; align-items: center; gap: 0.55rem; margin: 0 0 0.8rem; font-size: 1rem; }
 .settings-card p { margin: 0.75rem 0; color: #b8c0cc; font-size: 0.85rem; line-height: 1.65; }
 .settings-audio-stats { display: flex; align-items: center; gap: 0.55rem; padding: 0.85rem; margin: 1rem 0; border-radius: 0.4rem; background: #181b20; color: #e0e7f1; font-size: 0.85rem; }
@@ -12,6 +13,27 @@
 .settings-actions button { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 0.8rem; }
 .settings-card p.settings-success { color: #86efac; }
 .settings-card p.settings-error { color: #fca5a5; overflow-wrap: anywhere; }
+.settings-field-label { display: block; margin: 1rem 0 0.5rem; font-size: 0.85rem; font-weight: 600; }
+.settings-folder-input { display: block; width: 100%; box-sizing: border-box; padding: 0.75rem; color: #eff2f6; background: #181b20; border: 1px solid #485363; border-radius: 0.4rem; font: inherit; font-size: 0.85rem; }
+.settings-folder-input:focus { outline: 2px solid #60a5fa; outline-offset: 2px; }
+.settings-folder-input:disabled { color: #aeb5c1; opacity: 0.7; }
+.settings-storage-paths { display: grid; gap: 0.9rem; padding: 1rem; margin: 1rem 0; border-radius: 0.4rem; background: #181b20; font-size: 0.8rem; }
+.settings-storage-paths dt { margin-bottom: 0.25rem; color: #aeb5c1; }
+.settings-storage-paths dd { margin: 0; color: #e0e7f1; overflow-wrap: anywhere; }
+.settings-storage-paths code { font-size: inherit; }
+.settings-card p.settings-restart-note { color: #fde68a; }
 .settings-spinner { animation: settings-spin 1s linear infinite; }
 @keyframes settings-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .settings-spinner { animation: none; } }
+.settings-view-embedded { height: auto; overflow: visible; padding: 0; color: #172b4d; }
+.settings-view-embedded .settings-content { max-width: none; }
+.settings-view-embedded .settings-card { background: white; border-color: #e5e7eb; }
+.settings-view-embedded .settings-card p, .settings-view-embedded .settings-storage-paths dt { color: #4b5563; }
+.settings-view-embedded .settings-folder-input { color: #172b4d; background: white; border-color: #cbd5e1; }
+.settings-view-embedded .settings-storage-paths, .settings-view-embedded .settings-audio-stats { color: #172b4d; background: #f8fafc; }
+.settings-view-embedded .settings-storage-paths dd { color: #172b4d; }
+.settings-view-embedded .settings-actions button { color: #172b4d; background: white; border: 1px solid #cbd5e1; padding: 0.6rem 0.85rem; border-radius: 0.35rem; }
+.settings-view-embedded .settings-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+.settings-view-embedded .settings-card p.settings-success { color: #15803d; }
+.settings-view-embedded .settings-card p.settings-error { color: #b91c1c; }
+.settings-view-embedded .settings-card p.settings-restart-note { color: #92400e; }

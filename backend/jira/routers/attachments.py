@@ -25,7 +25,7 @@ async def upload(issue_id: str, request: Request, file: UploadFile | None = None
         return JSONResponse(
             {'error': 'File exceeds the maximum allowed size of 10 MB. Current file rejected.'}, 400)
 
-    upload_dir = resolve_upload_dir()
+    upload_dir = getattr(request.app.state, 'upload_dir', None) or resolve_upload_dir()
     os.makedirs(upload_dir, exist_ok=True)
 
     original = file.filename or 'file'
@@ -61,10 +61,11 @@ def list_attachments(issue_id: str):
 
 
 @router.delete('/{id}')
-def delete_attachment(id: str):
+def delete_attachment(id: str, request: Request):
     att = db.q1('SELECT filename FROM attachments WHERE id = ?', id)
     if att:
-        path = os.path.join(resolve_upload_dir(), att['filename'])
+        upload_dir = getattr(request.app.state, 'upload_dir', None) or resolve_upload_dir()
+        path = os.path.join(upload_dir, att['filename'])
         if os.path.exists(path):
             try:
                 os.remove(path)

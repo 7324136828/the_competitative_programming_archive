@@ -49,6 +49,21 @@ class RuntimeDiscoveryTests(unittest.TestCase):
         with patch.object(runtimes.sys, "executable", "missing-python"):
             self.assertEqual(runtimes.discover_runtimes()["python"].executable, python)
 
+    def test_frozen_server_is_never_probed_as_a_python_interpreter(self):
+        server = self.executable("server.exe")
+        python = self.executable("python.exe")
+        self.which.side_effect = lambda name: python if name == "python" else None
+        with patch.object(runtimes.sys, "executable", server), patch.object(runtimes.sys, "frozen", True, create=True):
+            self.assertEqual(runtimes.discover_runtimes()["python"].executable, python)
+        self.assertFalse(any(call.args[0] == server for call in self.usable.call_args_list))
+
+    def test_frozen_server_found_on_path_is_also_excluded(self):
+        server = self.executable("server.exe")
+        self.which.side_effect = lambda name: server if name in ("python", "python3") else None
+        with patch.object(runtimes.sys, "executable", server), patch.object(runtimes.sys, "frozen", True, create=True):
+            self.assertNotIn("python", runtimes.discover_runtimes())
+        self.usable.assert_not_called()
+
     def test_path_compiler_and_public_language_metadata(self):
         compiler = self.executable("clang++")
         self.which.side_effect = lambda name: compiler if name == "clang++" else None
@@ -88,6 +103,17 @@ class RuntimeDiscoveryTests(unittest.TestCase):
             environment = runtimes.Runtime(compiler, compiler).environment()
             self.assertEqual(environment["PATH"], str(Path(compiler).parent) + os.pathsep + "original-path")
             self.assertEqual(os.environ["PATH"], "original-path")
+
+    def test_frozen_external_environment_removes_bundle_paths_only(self):
+        bundle = self.root / "bundle"
+        outside = self.root / "external-tools"
+        original = {"PATH": os.pathsep.join((str(bundle), str(bundle / "native"), str(outside))), "CUSTOM": "preserve"}
+        with patch.object(runtimes.sys, "frozen", True, create=True), patch.object(
+            runtimes.sys, "_MEIPASS", str(bundle), create=True
+        ):
+            clean = runtimes.external_environment(original)
+        self.assertEqual(clean, {"PATH": str(outside), "CUSTOM": "preserve"})
+        self.assertNotEqual(original["PATH"], clean["PATH"])
 
 
 class RuntimeProbeTests(unittest.TestCase):

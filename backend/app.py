@@ -11,7 +11,7 @@ import threading
 from typing import Any
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
-from werkzeug.exceptions import HTTPException, NotFound, RequestEntityTooLarge
+from werkzeug.exceptions import Forbidden, HTTPException, NotFound, RequestEntityTooLarge
 
 from .db import Database, bounded_int
 from .executor import run_code, submit_code, validate_test_cases
@@ -27,7 +27,14 @@ from .llm import (
     get_thinking_hints,
     translate_problem,
 )
-from .paths import ROOT, default_database_path, default_storage_path, legacy_archive_database_path
+from .paths import (
+    ROOT, default_database_path, default_storage_path, legacy_archive_database_path,
+    legacy_storage_path, legacy_unified_database_path,
+)
+from .settings import (
+    APP_NAME, configured_data_dir, default_data_dir, initialize_settings,
+    save_data_dir, settings_editable, settings_path,
+)
 from .runtimes import available_languages
 from .seed import seed_database
 from .storage import DraftConflict, DraftProblemNotFound, DraftStore, export_submissions
@@ -111,6 +118,14 @@ def validate_code(data: dict) -> None:
 
 def create_app(config: dict | None = None) -> Flask:
     app = Flask(__name__, static_folder=None)
+    requested_config = dict(config or {})
+    settings_file = Path(requested_config.get("SETTINGS_PATH") or settings_path())
+    # Existing API tests supply their own databases and must not create user settings.
+    active_data_dir = (
+        configured_data_dir(settings_file)
+        if requested_config.get("TESTING") and not requested_config.get("SETTINGS_PATH")
+        else initialize_settings(settings_file)
+    )
     try:
         max_upload_mb = int(os.environ.get("MAX_UPLOAD_MB", "256"))
         if max_upload_mb <= 0:
@@ -119,7 +134,7 @@ def create_app(config: dict | None = None) -> Flask:
         raise ValueError("MAX_UPLOAD_MB must be a positive integer (in MiB).") from error
 
     app.config.from_mapping(
-        DATABASE_PATH=os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH") or str(default_database_path()),
+        DATABASE_PATH=os.environ.get("DATABASE_PATH") or os.environ.get("DB_PATH") or os.environ.get("JIRA_DB_PATH") or str(default_database_path(active_data_dir)),
         AUTO_SEED=env_opt_in("AUTO_SEED"),
         SEED_PATH=str(ROOT / "problem.json"),
         CLIENT_DIST=str(ROOT / "frontend" / "dist"),
@@ -127,6 +142,9 @@ def create_app(config: dict | None = None) -> Flask:
         SUBMISSION_WORKERS=2,
         SUBMISSION_MAX_PENDING=16,
         WORKSPACE_STORAGE_DIR=os.environ.get("WORKSPACE_STORAGE_DIR") or None,
+        UPLOAD_DIR=os.environ.get("UPLOAD_DIR") or None,
+        SETTINGS_PATH=str(settings_file),
+        ACTIVE_DATA_DIR=str(active_data_dir),
         CONNECTOR_BASE_URL=os.environ.get("CONNECTOR_BASE_URL", "http://127.0.0.1:8301/v1"),
         CONNECTOR_SPEECH_TIMEOUT_SECONDS=os.environ.get("CONNECTOR_SPEECH_TIMEOUT_SECONDS", "180"),
     )
@@ -145,8 +163,13 @@ def create_app(config: dict | None = None) -> Flask:
         max_pending=app.config["SUBMISSION_MAX_PENDING"],
     )
     app.extensions["submission_jobs"] = jobs
-    storage_root = Path(app.config["WORKSPACE_STORAGE_DIR"] or default_storage_path(app.config["DATABASE_PATH"]))
+    storage_root = Path(app.config["WORKSPACE_STORAGE_DIR"] or default_storage_path(app.config["DATABASE_PATH"], active_data_dir))
     app.config["WORKSPACE_STORAGE_DIR"] = str(storage_root)
+    upload_root = Path(app.config["UPLOAD_DIR"] or (database.path.parent / "uploads"))
+    if not upload_root.is_absolute() and os.environ.get("UPLOAD_DIR") and not requested_config.get("UPLOAD_DIR"):
+        # Preserve Jira's existing interpretation of relative UPLOAD_DIR overrides.
+        upload_root = ROOT / "backend" / upload_root
+    app.config["UPLOAD_DIR"] = str(upload_root.resolve())
     drafts = DraftStore(database, storage_root / "drafts")
     audio = AudioStore(
         storage_root / "audio",
@@ -237,6 +260,47 @@ def create_app(config: dict | None = None) -> Flask:
     @app.get("/api/languages")
     def languages():
         return jsonify(success=True, languages=available_languages())
+
+    def settings_response():
+        selected = configured_data_dir(settings_file)
+        overrides = {
+            key: os.environ[key]
+            for key in ("DATABASE_PATH", "DB_PATH", "JIRA_DB_PATH", "WORKSPACE_STORAGE_DIR", "UPLOAD_DIR")
+            if os.environ.get(key)
+        }
+        for key in ("DATABASE_PATH", "WORKSPACE_STORAGE_DIR", "UPLOAD_DIR"):
+            if key == "DATABASE_PATH" and requested_config.get("DATABASE_IS_DEFAULT"):
+                continue
+            if requested_config.get(key):
+                overrides[key] = str(requested_config[key])
+        return jsonify(
+            success=True,
+            app_name=APP_NAME,
+            settings_path=str(settings_file),
+            data_dir=str(selected),
+            active_data_dir=str(active_data_dir),
+            default_data_dir=str(default_data_dir()),
+            restart_required=selected != active_data_dir,
+            editable=settings_editable(request.remote_addr, request.headers),
+            overrides=overrides,
+        )
+
+    @app.get("/api/settings")
+    def get_application_settings():
+        return settings_response()
+
+    @app.put("/api/settings")
+    def update_application_settings():
+        if not settings_editable(request.remote_addr, request.headers):
+            raise Forbidden("Change storage settings from a browser on the host computer.")
+        payload = json_object()
+        if set(payload) != {"data_dir"}:
+            raise ValueError("Provide only the data_dir setting.")
+        try:
+            save_data_dir(payload["data_dir"], settings_file)
+        except OSError as error:
+            raise ValueError(f"Unable to save settings: {error}") from error
+        return settings_response()
 
     @app.get("/api/llm/models")
     def llm_models():
@@ -648,13 +712,21 @@ def create_unified_app(flask_config: dict | None = None):
         requested_config.get("DATABASE_PATH")
         or os.environ.get("DATABASE_PATH")
         or os.environ.get("DB_PATH")
-        or default_database_path()
+        or os.environ.get("JIRA_DB_PATH")
+        or default_database_path(configured_data_dir(requested_config.get("SETTINGS_PATH")))
     ).resolve()
     auto_seed = requested_config.get(
         "AUTO_SEED",
         env_opt_in("AUTO_SEED"),
     )
-    requested_config.update({"DATABASE_PATH": str(unified_path), "AUTO_SEED": False})
+    explicit_database = bool(
+        requested_config.get("DATABASE_PATH") or os.environ.get("DATABASE_PATH")
+        or os.environ.get("DB_PATH") or os.environ.get("JIRA_DB_PATH")
+    )
+    requested_config.update({
+        "DATABASE_PATH": str(unified_path), "AUTO_SEED": False,
+        "DATABASE_IS_DEFAULT": not explicit_database,
+    })
     flask_app = create_app(requested_config)
     if jira_database.path == ':memory:' or Path(jira_database.path).resolve() != unified_path:
         jira_database.reopen(str(unified_path))
@@ -666,7 +738,7 @@ def create_unified_app(flask_config: dict | None = None):
     )
     migrations = merge_legacy_databases(
         unified_path,
-        [legacy_archive_database_path(), legacy_jira_path, resolve_db_path()],
+        [legacy_unified_database_path(), legacy_archive_database_path(), legacy_jira_path, resolve_db_path()],
     ) if should_migrate else {}
     if migrations:
         print(f"Unified database imported legacy data from: {', '.join(migrations)}")
@@ -675,7 +747,7 @@ def create_unified_app(flask_config: dict | None = None):
             for source, copied_tables in migrations.items():
                 if copied_tables.get('problems', 0):
                     copied_files = copy_legacy_workspace(
-                        default_storage_path(source),
+                        legacy_storage_path(source),
                         target_workspace,
                     )
                     if copied_files:
@@ -700,6 +772,19 @@ def create_unified_app(flask_config: dict | None = None):
     jira_app.state.archive_database = flask_app.extensions["database"]
     jira_app.state.archive_mutation_lock = flask_app.extensions["mutation_lock"]
     jira_app.state.archive_app = flask_app
+    jira_app.state.upload_dir = flask_app.config["UPLOAD_DIR"]
+    # A prior import/app instance may have mounted uploads for a different database.
+    from fastapi.staticfiles import StaticFiles
+    upload_dir = Path(jira_app.state.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    previous_upload_mount = next((route for route in jira_app.router.routes if getattr(route, "name", None) == "uploads"), None)
+    if previous_upload_mount is not None:
+        position = jira_app.router.routes.index(previous_upload_mount)
+        jira_app.router.routes.remove(previous_upload_mount)
+        jira_app.mount("/uploads", StaticFiles(directory=str(upload_dir)), name="uploads")
+        jira_app.router.routes.insert(position, jira_app.router.routes.pop())
+    else:
+        jira_app.mount("/uploads", StaticFiles(directory=str(upload_dir)), name="uploads")
     previous_mount = getattr(jira_app.state, "archive_mount", None)
     if previous_mount in jira_app.router.routes:
         jira_app.router.routes.remove(previous_mount)
@@ -718,7 +803,7 @@ def main():
     args = parser.parse_args()
 
     unified_app = create_unified_app()
-    uvicorn.run(unified_app, host=args.host, port=args.port)
+    uvicorn.run(unified_app, host=args.host, port=args.port, proxy_headers=False)
 
 
 if __name__ == "__main__":
